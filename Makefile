@@ -50,6 +50,10 @@ issue-queue-check:
 issue-backend-check:
 	@python3 tools/run_unit.py issue_backend --suite "$(OSS_CAD_SUITE)"
 
+.PHONY: load-transaction-check
+load-transaction-check:
+	@python3 tools/run_unit.py load_transaction --suite "$(OSS_CAD_SUITE)"
+
 .PHONY: load-store-prepare-check
 load-store-prepare-check:
 	@python3 tools/run_unit.py load_store_prepare --suite "$(OSS_CAD_SUITE)"
