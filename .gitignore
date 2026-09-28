@@ -2,6 +2,12 @@
 /docs_plan/
 /verif/reference/
 
+# Local environment and machine settings
+.env
+.env.*
+!.env.example
+/config/local/
+
 # Generated output
 /evidence/
 /out/
