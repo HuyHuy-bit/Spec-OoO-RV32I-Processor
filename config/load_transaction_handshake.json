@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "profile": "load_transaction_handshake_smoke",
+  "top": "load_transaction_handshake",
+  "sources": ["rtl/generated/memory_protocol_pkg.sv", "rtl/execute/load_transaction.sv", "verif/formal/memory/load_transaction_handshake.sv"],
+  "mode": "bmc",
+  "engine": "smtbmc yices",
+  "cover_engine": "smtbmc yices",
+  "depth": 20,
+  "timeout_seconds": 120,
+  "assumptions": [
+    "Initial sampled edge asserts reset; subsequent resets are unconstrained and cancel target obligations.",
+    "Caller launches only when ready, consumes only valid results, and never kills an irrevocable uncached load.",
+    "Launched descriptors use legal RV32I load sizes/signs and are aligned unless already faulted.",
+    "Issue permission, head validity and full head identity remain unconstrained, including after a request is offered. No target or sink fairness or finite stall bound is assumed."
+  ],
+  "environment": [
+    "Independent single-outstanding target ledger captures the external request_valid && request_ready handshake and its packet. It never reads DUT state or response_ready to schedule a response.",
+    "Responses may arrive on any later sampled edge, including the first eligible edge. ID and payload class come from the accepted packet; status may be OK or access fault. Successful payload bytes are arbitrary within legal lanes; access-fault data is zero.",
+    "The target retires its obligation when it presents the response; a separate assertion requires DUT readiness to equal outstanding ownership. Duplicate requests are asserted against, not assumed away.",
+    "All properties use clocked immediate assertions and explicit history registers. Reset suspends traffic properties and clears the ledger; legal traffic must never raise fatal."
+  ],
+  "required_covers": ["cached_accept", "uncached_accept", "retained_permission", "dropped_permission", "uncached_head_dropped", "stalled_request_seen", "killed_stall", "earliest_response", "delayed_response", "canceled_response", "kill_response", "response_access_fault", "completed_result", "next_request", "reset_pending"],
+  "unit_mutation_profile": "load_transaction",
+  "unit_mutations": {
+    "request_requires_permission_drop": ["response_ownership", "no_duplicate_offer"],
+    "request_withdraw": ["held_valid", "held_payload", "response_ownership"],
+    "live_address": ["held_payload"]
+  },
+  "extra_inputs": ["config/load_transaction.json", "tools/unit_profiles.py", "Makefile"],
+  "claim": "Depth-20 bounded load-request stability and external handshake ownership smoke under a legal target. Not induction, complete load verification, malformed-response/fatal recovery proof, data correctness, C++ memory safety, production integration, or full-core formal acceptance."
+}
