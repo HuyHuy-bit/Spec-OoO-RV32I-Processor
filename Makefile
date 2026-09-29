@@ -55,6 +55,10 @@ issue-backend-check:
 committed-store-check:
 	@python3 tools/run_unit.py committed_store --suite "$(OSS_CAD_SUITE)"
 
+.PHONY: mmio-store-check
+mmio-store-check:
+	@python3 tools/run_unit.py mmio_store_transaction --suite "$(OSS_CAD_SUITE)"
+
 load-transaction-check:
 	@python3 tools/run_unit.py load_transaction --suite "$(OSS_CAD_SUITE)"
 
