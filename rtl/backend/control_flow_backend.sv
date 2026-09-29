@@ -201,7 +201,7 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
   end
 
   issue_backend backend (
-    .queue_skip_i(system_op), .head_read_i(head_read), .head_source_i(system_source),
+    .queue_skip_i(system_op), .head_read_i(head_read), .head_source_i({6'd0, system_source}),
     .serial_offer_i(serial_offer), .serial_id_i(serial_id), .serial_event_i(serial_event), .serial_accept_o(serial_accept),
     .clk_i, .rst_i, .flush_i, .drained_i,
     .resources_ready_i((admitted & ~supported_o) == 0),

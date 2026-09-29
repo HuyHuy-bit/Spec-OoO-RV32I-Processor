@@ -31,6 +31,8 @@ struct Input {
     unsigned count = 0, cfi = 0, solo = 0, retire_ready = 3, resolve_id = 0, ports = 3;
     std::array<unsigned, 2> rd{}, rs1{}, rs2{}, eligible{3, 3};
     std::array<Completion, 2> complete{};
+    std::array<unsigned, 2> head_sources{};
+    bool head_read = false;
     bool reset = false, flush = false, drain = false, resources = true;
     bool resolve = false, grant = true, mispredict = false, trap_ready = false;
 };
@@ -136,6 +138,7 @@ public:
         // Selection uses program order, never the queue's sparse slots or modular age comparison.
         const bool stop = !active || trap || recovery;
         const unsigned occupancy = resident();
+        const unsigned ports_eff = in.head_read ? 0:in.ports;
         std::vector<std::array<bool, 2>> wake(queue.size());
         bool any_wake = false;
         for (unsigned n = 0; n < queue.size(); ++n) {
@@ -149,7 +152,7 @@ public:
         }
         std::array<int, 2> pick{-1, -1};
         for (unsigned port = 0; port < 2; ++port)
-            if (!stop && (in.ports & (1U << port)))
+            if (!stop && (ports_eff & (1U << port)))
                 for (unsigned n = 0; n < queue.size(); ++n)
                     if (queue[n].queued && wake[n][0] && wake[n][1] && (queue[n].eligible & (1U << port))
                         && (port == 0 || pick[0] != int(n))) { pick[port] = int(n); break; }
@@ -182,7 +185,8 @@ public:
         unsigned cp_slot = 0; while (cp_slot < 8 && (cp & (1U << cp_slot))) ++cp_slot;
         const bool create = alloc && needs_cp;
 
-        dut.queue_skip_i=0; dut.head_read_i=0; dut.head_source_i=0;
+        dut.queue_skip_i=0; dut.head_read_i=in.head_read;
+        dut.head_source_i=in.head_sources[0] | (in.head_sources[1] << 6);
         dut.serial_offer_i=0; dut.serial_id_i=0;
         for (unsigned word=0;word<(EVENT_BITS+31)/32;word++) dut.serial_event_i[word]=0;
         dut.clk_i = 0; dut.rst_i = in.reset; dut.flush_i = in.flush; dut.drained_i = in.drain;
@@ -251,26 +255,58 @@ public:
             const uint64_t launched = dut.issue_payload_o[2*port] | (uint64_t(dut.issue_payload_o[2*port+1]) << 32);
             require(launched == (issued ? expected.payload : 0), "issue payload");
             for (unsigned operand = 0; operand < 2; ++operand) {
-                const unsigned p = issued ? expected.source[operand] : 0, index = port*2+operand;
+                const unsigned p = in.head_read ? (port == 0 ? in.head_sources[operand]:0)
+                    : issued ? expected.source[operand] : 0, index = port*2+operand;
                 uint32_t value = payload[p]; bool defined = known[p];
                 for (unsigned lane = 0; lane < 2; ++lane) if ((wb & (1U << lane)) && wb_tag[lane] == p) {
                     value = unsigned(get(in.complete[lane].event, RD_VALUE_OFFSET, 32)); defined = true;
                     if (issued) ++coverage["prf_bypass"];
+                    if (in.head_read && port==0) ++coverage["head_bypass_"+std::to_string(operand)+"_"+std::to_string(lane)];
                 }
                 if (defined) require(get(dut.read_data_o, index*32, 32) == value, "PRF payload");
+                if (in.head_read && port==0) {
+                    coverage["head_known_high"] += defined && p>=32;
+                    coverage["head_zero"] += p==0;
+                    coverage["head_free"] += (free()>>p)&1;
+                    coverage["head_reclaimed"] += (reclaim>>p)&1;
+                }
                 require(((dut.read_ready_o >> index)&1) == (active && !trap && ((readiness & ~reclaim) >> p & 1)), "PRF readiness");
             }
         }
 
         const unsigned launches = unsigned(pick[0] >= 0)+unsigned(pick[1] >= 0);
+        if (in.head_read) {
+            unsigned head_ready=0;
+            for (unsigned operand=0;operand<2;++operand)
+                head_ready |= unsigned(active && !trap && ((readiness & ~reclaim)>>in.head_sources[operand]&1))<<operand;
+            ++coverage["head_ready_"+std::to_string(head_ready)];
+            ++coverage["head_read"];
+            coverage["head_empty"] += queue.empty();
+            coverage["head_duplicate"] += in.head_sources[0]==in.head_sources[1] && in.head_sources[0]!=0;
+            coverage["head_allocate"] += alloc!=0;
+            coverage["head_retire"] += retire!=0;
+            coverage["head_reset"] += in.reset;
+            coverage["head_flush"] += in.flush;
+            coverage["head_trap"] += trap;
+            coverage["head_recovery"] += recovery;
+            for (unsigned n=0;n<queue.size();++n)
+                coverage["head_blocks_issue"] += !stop && queue[n].queued && wake[n][0] && wake[n][1]
+                    && (queue[n].eligible & in.ports)!=0;
+            for (unsigned lane=0;lane<2;++lane) {
+                coverage["head_rejected"] += in.complete[lane].offer && !(complete & (1U<<lane));
+                coverage["head_fault_no_write"] += (complete & (1U<<lane)) && bit(in.complete[lane].event,TRAP_OFFSET);
+                coverage["head_resultless"] += (complete & (1U<<lane)) && !queue[locate(in.complete[lane].id)].rd
+                    && !bit(in.complete[lane].event,TRAP_OFFSET);
+            }
+        }
         coverage["dual_allocate"] += alloc == 3; coverage["dual_complete"] += complete == 3; coverage["dual_retire"] += retire == 3;
         coverage["dual_issue"] += launches == 2; coverage["dispatch_issue"] += alloc && launches;
         coverage["simultaneous"] += alloc && complete && retire && launches;
         coverage["queue_full"] += occupancy == 16 && !stop;
         coverage["queue_stall"] += !alloc && count && in.resources && occupancy+count > 16;
         coverage["rob_full"] += queue.size() == 32; coverage["prf_full"] += free() == 0;
-        coverage["backpressure"] += occupancy && in.ports == 0 && !stop;
-        coverage["stalled_wakeup"] += any_wake && in.ports == 0 && !stop;
+        coverage["backpressure"] += occupancy && ports_eff == 0 && !stop;
+        coverage["stalled_wakeup"] += any_wake && ports_eff == 0 && !stop;
         coverage["retained_wakeup"] += wake_pending && launches && !wb;
         coverage["unaccepted_broadcast"] += !stop && in.complete[0].offer && !(complete&1);
         for (unsigned port = 0; port < 2; ++port) if (pick[port] >= 0) {
@@ -295,7 +331,7 @@ public:
             coverage["fault_no_write"] += e.rd && bit(in.complete[lane].event, TRAP_OFFSET);
             coverage["resultless"] += !e.rd && !bit(in.complete[lane].event, TRAP_OFFSET);
         }
-        wake_pending = any_wake && in.ports == 0 && !stop;
+        wake_pending = any_wake && ports_eff == 0 && !stop;
 
         if (in.reset) {
             for (unsigned i = 0; i < 32; ++i) committed[i] = i;
@@ -426,9 +462,71 @@ void directed(Check& c, std::mt19937& rng) {
     in = {}; in.reset = true; c.run(in);
     in = {}; in.drain = true; c.run(in);
 }
-void random_run(Check& c, std::mt19937& rng, unsigned cycles) {
+void head_reads(Check& c, std::mt19937& rng) {
+    Input in; in.retire_ready=0;
+    for (unsigned n=0;n<32;n+=2) {
+        in.count=2; in.rd={1+n%31,1+(n+1)%31}; c.run(in);
+    }
+    const unsigned high0=c.queue[30].destination, high1=c.queue[31].destination;
+    c.require(high0==62 && high1==63,"high head tag setup");
+    in={}; in.retire_ready=0; in.head_read=true; in.head_sources={high0,high1}; c.run(in);
+    in.head_sources={0,high1}; c.run(in);
+    in.head_sources={high0,0}; c.run(in);
+    in.head_sources={high1,high1}; c.run(in);
+    in.head_read=false; c.run(in);
+    for (unsigned n=0;n<32;n+=2) {
+        in={}; in.retire_ready=0; in.head_read=true;
+        in.complete={c.result(n,rng),c.result(n+1,rng)};
+        for (unsigned lane=0;lane<2;++lane)
+            put(in.complete[lane].event,RD_VALUE_OFFSET,32,0xd00d0000U ^ (c.queue[n+lane].destination*0x010203U));
+        in.head_sources=n%4==0 ? std::array<unsigned,2>{c.queue[n].destination,c.queue[n+1].destination}
+            : std::array<unsigned,2>{c.queue[n+1].destination,c.queue[n].destination};
+        c.run(in);
+    }
+    for (unsigned tag=0;tag<64;++tag) {
+        in={}; in.retire_ready=0; in.head_read=true; in.head_sources={tag,63-tag}; c.run(in);
+    }
+    in.head_sources={high1,high1}; c.run(in);
+    const auto rejected=c.result(0,rng);
+    in.head_sources={c.queue[0].stale,c.queue[1].stale}; in.retire_ready=3; c.run(in);
+    in.retire_ready=0; c.run(in);
+    in.complete[0]=rejected; in.head_sources={32,33}; c.run(in);
+    drain(c,rng);
+
+    in={}; in.reset=true; c.run(in);
+    in={}; in.head_read=true; in.count=2; in.rd={1,0}; in.retire_ready=0; c.run(in);
+    in={}; in.retire_ready=0; c.run(in);
+    in.head_read=true; in.head_sources={c.queue[0].destination,0};
+    in.complete={c.result(0,rng,true),c.result(1,rng)}; c.run(in);
+    in.complete={}; in.trap_ready=true; c.run(in);
+
+    for (unsigned reverse=0;reverse<2;++reverse) {
+        in={}; in.reset=true; c.run(in);
+        in={}; in.retire_ready=0; in.ports=0; in.count=2; in.rd={1,2}; c.run(in);
+        in.count=1; in.rd={0,0}; in.cfi=1; in.eligible[0]=1; c.run(in);
+        in.cfi=0; in.count=2; in.rd={3,4}; in.eligible={3,3}; c.run(in);
+        in={}; in.retire_ready=0; c.run(in);
+        in.ports=1; c.run(in);
+        in.ports=3; c.run(in);
+        in.complete[0]=c.result(3,rng); c.run(in);
+        const unsigned older=c.queue[0].destination, younger=c.queue[3].destination, killed=c.queue[4].destination;
+        in={}; in.retire_ready=0; in.head_read=true;
+        in.head_sources=reverse ? std::array<unsigned,2>{younger,older}:std::array<unsigned,2>{older,younger};
+        in.resolve=true; in.mispredict=true; in.resolve_id=c.queue[2].id;
+        in.complete={c.result(0,rng),c.result(4,rng)}; c.run(in);
+        in={}; in.head_read=true; in.head_sources={younger,killed}; in.retire_ready=0; c.run(in);
+        drain(c,rng);
+    }
+    in={}; in.count=1; in.ports=0; in.rd[0]=5; c.run(in);
+    in={}; in.head_read=true; in.head_sources={c.queue[0].destination,63}; in.flush=true; c.run(in);
+    in={}; in.count=1; in.ports=0; in.rd[0]=5; c.run(in);
+    in={}; in.head_read=true; in.head_sources={63,c.queue[0].destination}; in.reset=true; c.run(in);
+    in={}; in.head_read=true; in.head_sources={0,63}; c.run(in);
+}
+void random_run(Check& c, std::mt19937& rng, std::mt19937& head_rng, unsigned cycles) {
     for (unsigned step = 0; step < cycles; ++step) {
-        Input in; in.count = rng()%3; in.retire_ready = rng()%4; in.resources = rng()%5 != 0;
+        Input in; in.head_read=head_rng()%8==0; in.head_sources={unsigned(head_rng()%64),unsigned(head_rng()%64)};
+        in.count = rng()%3; in.retire_ready = rng()%4; in.resources = rng()%5 != 0;
         in.trap_ready = rng()%2; in.ports = rng()%4;
         for (unsigned lane = 0; lane < 2; ++lane) {
             in.rd[lane] = rng()%32; in.rs1[lane] = rng()%32; in.rs2[lane] = rng()%32;
@@ -479,8 +577,11 @@ int main(int argc, char** argv) {
         const unsigned random_cycles = argc > 2 ? unsigned(std::stoul(argv[2])) : 20000;
         std::mt19937 rng(seed);
         directed(c, rng);
+        std::mt19937 head_directed_rng(seed ^ 0x29d1ec7U);
+        head_reads(c,head_directed_rng);
         const auto directed_cycles = c.cycles;
-        random_run(c, rng, random_cycles);
+        std::mt19937 head_rng(seed ^ 0xa29b5c7dU);
+        random_run(c, rng, head_rng, random_cycles);
         std::cout << "ISSUE BACKEND PASS seed=" << seed << " cycles=" << c.cycles << " directed=" << directed_cycles;
         for (const auto& [key, value] : c.coverage) std::cout << " " << key << "=" << value;
         std::cout << "\n";

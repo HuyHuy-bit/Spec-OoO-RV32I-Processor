@@ -3,7 +3,7 @@ module issue_backend (
   input wire clk_i, rst_i, flush_i, drained_i, resources_ready_i,
   input wire [1:0] valid_i, cfi_i, solo_i, queue_skip_i,
   input wire head_read_i,
-  input wire [5:0] head_source_i,
+  input wire [11:0] head_source_i,
   input wire serial_offer_i,
   input wire [12:0] serial_id_i,
   input commit_event_pkg::commit_event_t serial_event_i,
@@ -55,7 +55,7 @@ module issue_backend (
 );
   wire [1:0] dispatch_ready;
   wire unused_serial_ready;
-  wire [23:0] read_address = head_read_i ? {18'd0, head_source_i} : issue_source_o;
+  wire [23:0] read_address = head_read_i ? {12'd0, head_source_i} : issue_source_o;
   wire recover = flush_i || trap_accept_o;
 
   // The queue must hold the whole renamed prefix, so its credits join the allocation stall.

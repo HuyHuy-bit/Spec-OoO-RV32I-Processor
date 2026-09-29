@@ -44,7 +44,7 @@ module integer_backend (
   end
 
   issue_backend backend (
-    .queue_skip_i(2'b00), .head_read_i(1'b0), .head_source_i(6'd0),
+    .queue_skip_i(2'b00), .head_read_i(1'b0), .head_source_i(12'd0),
     .serial_offer_i(1'b0), .serial_id_i(13'd0), .serial_event_i('0), .serial_accept_o(),
     .clk_i, .rst_i, .flush_i, .drained_i,
     .resources_ready_i((valid_i & ~supported_o) == 0),
