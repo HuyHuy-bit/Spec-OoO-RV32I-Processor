@@ -59,6 +59,10 @@ committed-store-check:
 mmio-store-check:
 	@python3 tools/run_unit.py mmio_store_transaction --suite "$(OSS_CAD_SUITE)"
 
+.PHONY: memory-path-check
+memory-path-check:
+	@python3 tools/run_unit.py memory_transaction_path --suite "$(OSS_CAD_SUITE)"
+
 .PHONY: data-port-check
 data-port-check:
 	@python3 tools/run_unit.py data_port_arbiter --suite "$(OSS_CAD_SUITE)"
