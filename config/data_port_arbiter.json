@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "profile": "three_client_single_outstanding_data_port",
+  "sources": [
+    "rtl/generated/memory_protocol_pkg.sv",
+    "rtl/execute/data_port_arbiter.sv"
+  ],
+  "lint_config": "config/fetch_two_wide.vlt",
+  "seeds": [
+    1,
+    42,
+    20260928
+  ],
+  "random_cases_per_seed": 2000,
+  "scope": "Standalone reservation and routing for client 0 load, 1 committed store and 2 MMIO store. No connected engines, production issue/ROB/retirement, LSQ, ordering/forwarding, cache, device qualification, exhaustive formal or physical timing claim.",
+  "reservation": "reserve_i is qualified independently of grant by the future caller using eligible engine state, full identity/head rules, kill/recovery, global fatal, memory ordering and older committed-store drain. grant_o is one-hot final acceptance, not an offer the client may decline. The edge reserves the port before the selected engine's next-cycle request. Load/MMIO grant drives issue_allowed_i; the MMIO authorize_o must coincide with its grant. The load has no separate acceptance output. Selected request-valid is required in the cycle after grant and until its handshake; a missing offer is a caller assertion failure. Only client 1 may offer while unselected. No withdrawal/cancel input exists after grant.",
+  "arbitration": "Three-client round robin begins with client 0 after shared reset and advances to the client after each accepted grant. Eligible requests may change before grant; pending clients must keep requesting to claim fairness. At most two other grants bypass a continuously requesting client if each granted client and target makes progress. This is not a cycle bound or memory-order policy. Test all seven contention masks, but production eligibility must obey conservative memory ordering. There is no grant in a request/response handshake cycle and no same-cycle turnover.",
+  "routing": "Store the selected engine through the response handshake, irrespective of later reserve changes. Forward only its request and return ready only to it. Client request data/valid must remain stable until acceptance, except shared reset or fatal; stability depends on the client and is checked by the unit bus ledger, not a hardware packet buffer. Route response valid exclusively to the recorded engine and response ready exclusively from it, never by transaction ID. Broadcast response payload unchanged even when invalid/reset/fatal; consumers must honor valid. Inactive outgoing request payload is zero. Engines may use identical transaction IDs. ID/status/payload validation remains with the owning engine.",
+  "fatal": "Client fatal inputs are registered engine errors and must be visible by the cycle after a malformed response handshake. They combinationally suppress all grants and request/response channels and latch arbiter fatal on the next edge. No extra completion cycle is needed. First sticky reason: 0 none, 1 target response outside RESPONSE, 2 nonzero client fatal mask; client fatal wins a simultaneous error. fatal_clients_o captures the first client mask and never changes before reset. Unexpected-phase response blocks grants and response acceptance immediately but does not combinationally withdraw an offered request; it may coincide with a real request handshake before fatal latches. The effect is uncertain and must not be retried. Registered arbiter fatal suppresses all channels. Busy/owner freeze if a port transaction was pending at fatal; after an already accepted response they remain empty even if the client reports fatal next cycle. Global control must observe all engine/arbiter fatal signals independently of busy.",
+  "ownership": "busy_o and one-hot owner_o describe port reservation, not architectural store/result ownership. Engines may retain results or fatal ownership after the port response completes. A successful response releases the port; a client fatal in the next cycle prevents any subsequent grant even when reserve remains asserted. No target request-valid path depends combinationally on target response-valid.",
+  "reset": "Arbiter and all three engines share reset. Reset suppresses grants and handshake channels, clears reservation/round-robin/fatal state and requires the target to suppress pre-reset responses. Partial resets violate ownership. Reset does not guarantee completion or undo an already accepted device write. Fatal diagnostics clear synchronously at the reset edge; global control ignores them while reset is asserted."
+}
