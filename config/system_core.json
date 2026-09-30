@@ -19,7 +19,7 @@
     "rtl/backend/issue_backend.sv",
     "rtl/execute/alu_pipeline.sv",
     "rtl/execute/control_flow_pipeline.sv",
-    "rtl/core/head_system_dispatch.sv",
+    "rtl/core/head_dispatch.sv",
     "rtl/core/head_system_controller.sv",
     "rtl/backend/control_flow_backend.sv",
     "rtl/frontend/fetch_two_wide.sv",
@@ -39,7 +39,7 @@
     "FRONTEND_FAULTS": 1,
     "TRAP_SERVICE": 1
   },
-  "dispatch": "CSR/MRET/WFI are supported only with TRAP_SERVICE=1. They allocate alone through head_system_dispatch, preserve full ROB identity and renamed source (including rd=rs1), bypass IQ, and block all younger allocation until actual retirement or recovery. Older IQ work remains enabled. Unsupported memory/FENCE operations retain their existing stall behavior.",
+  "dispatch": "CSR/MRET/WFI are supported only with TRAP_SERVICE=1. They allocate alone through head_dispatch, preserve full ROB identity and both renamed sources (including old rs1 when rd=rs1, and source2=p0), bypass IQ, and block all younger allocation until actual retirement or recovery. Older IQ work remains enabled. Unsupported memory/FENCE operations retain their existing stall behavior.",
   "ownership": "At the matching head, the descriptor reserves PRF reads, suppresses IQ issue and waits for read readiness. The shared head controller freezes the response. Legal acceptance atomically updates CSR state, PRF/committed ownership, ROB order and minstret. Normal CSR acceptance does not redirect; MRET redirects on its accepted retirement edge. No same-edge younger allocation occurs.",
   "illegal": "Illegal CSR accesses offer a resultless cause-2 completion on port zero, qualified by completion_enable_i[0]. Ordinary producer completions are held during that arbitration. The descriptor remains until the resulting trap is accepted. Final trap acceptance applies CSR effects, clears ROB/IQ/producers/descriptor and redirects to current mtvec.",
   "recovery": "External flush/reset/fatal cancel pending system responses. Accepted older branch recovery discards an unprepared younger descriptor. A pending head response or raw head fault blocks branch resolution, avoiding accepted-recovery feedback through CSR acceptance. Frontend redirect transport preserves offered requests and drains accepted stale responses. Global drain requires all existing holders plus the system descriptor/controller to be empty.",

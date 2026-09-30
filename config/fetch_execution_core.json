@@ -19,7 +19,7 @@
     "rtl/backend/issue_backend.sv",
     "rtl/execute/alu_pipeline.sv",
     "rtl/execute/control_flow_pipeline.sv",
-    "rtl/core/head_system_dispatch.sv",
+    "rtl/core/head_dispatch.sv",
     "rtl/core/head_system_controller.sv",
     "rtl/backend/control_flow_backend.sv",
     "rtl/frontend/fetch_two_wide.sv",

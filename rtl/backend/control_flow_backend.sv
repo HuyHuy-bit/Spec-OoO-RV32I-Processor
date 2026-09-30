@@ -40,7 +40,7 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
   decoded_t [1:0] decoded;
   wire [9:0] rs1, rs2, rd;
   wire [1:0] cfi, selected, producer_ready, system_op, admitted, dispatch_solo;
-  wire [5:0] rename_source, unused_rename_source;
+  wire [5:0] rename_source, rename_source2, unused_rename_source, unused_rename_source2;
   wire read_ready;
   wire [2:0] unused_read_ready;
   wire head_valid, head_read, serial_offer, serial_accept, illegal_offer, illegal_accept, backend_trap_ready;
@@ -51,7 +51,7 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
   wire [1:0] backend_complete_offer = illegal_offer ? {1'b0, completion_enable_i[0]} : completion_valid_o & completion_enable_i;
   wire [25:0] backend_complete_id = illegal_offer ? {13'd0, illegal_id} : completion_id_o;
   wire [1:0] backend_complete_solo = illegal_offer ? 2'b01 : 2'b00;
-  wire [5:0] system_source;
+  wire [11:0] system_sources;
   commit_event_pkg::commit_event_t [1:0] backend_complete_event;
   assign backend_complete_event = illegal_offer ? {commit_event_pkg::commit_event_t'('0), illegal_event} : completion_event_o;
   assign completion_accept_o = illegal_offer ? 2'b00 : backend_complete_accept;
@@ -146,17 +146,17 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
     wire descriptor_busy, killed;
     wire [12:0] system_id;
     wire [31:0] system_instruction, unused_pc;
-    head_system_dispatch dispatch (
+    head_dispatch dispatch (
       .clk_i, .rst_i, .flush_i(flush_i || trap_accept_o || cancel_system_i), .drained_i,
-      .valid_i(selected), .system_i(system_op), .cfi0_i(cfi[0]),
+      .valid_i(selected), .serial_i(system_op), .cfi0_i(cfi[0]), .memory_i(1'b0),
       .instruction_i(instruction_i[31:0]), .pc_i(pc_i[31:0]),
       .dispatch_valid_o(admitted), .dispatch_solo_o(dispatch_solo),
-      .allocate_accept_i(allocate_accept_o), .allocate_id_i(allocate_id_o[12:0]), .source1_i(rename_source[5:0]),
+      .allocate_accept_i(allocate_accept_o), .allocate_id_i(allocate_id_o[12:0]), .source1_i(rename_source[5:0]), .source2_i(rename_source2),
       .queue_dispatch_o(), .head_valid_i(head_valid), .head_id_i(head_id_o), .head_pc_i(head_pc),
       .recover_i(redirect_o), .recover_slot_i(resolve_id_o[4:0]),
-      .serial_accept_i(serial_accept), .serial_id_i(serial_id),
-      .busy_o(descriptor_busy), .system_valid_o(head_read), .killed_o(killed),
-      .system_id_o(system_id), .system_instruction_o(system_instruction), .system_pc_o(unused_pc), .system_source_o(system_source)
+      .retire_accept_i(serial_accept), .retire_id_i(serial_id),
+      .busy_o(descriptor_busy), .owner_valid_o(head_read), .killed_o(killed),
+      .owner_id_o(system_id), .owner_instruction_o(system_instruction), .owner_pc_o(unused_pc), .owner_sources_o(system_sources), .owner_memory_o()
     );
     head_system_controller head (
       .clk_i, .rst_i, .cancel_i(flush_i || cancel_system_i), .retire_accept_i(retire_accept_o),
@@ -183,7 +183,7 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
     assign admitted = selected;
     assign dispatch_solo = 0;
     assign head_read = 0;
-    assign system_source = 0;
+    assign system_sources = 0;
     assign serial_offer = 0;
     assign serial_id = 0;
     assign serial_event = '0;
@@ -197,17 +197,17 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
     assign system_redirect_pc_o = 0;
     assign system_trap_valid_o = 0;
     assign system_trap_event_o = '0;
-    wire unused_system = cancel_system_i ^ head_valid ^ ^head_pc ^ ^rename_source ^ ^read_ready ^ serial_accept ^ illegal_accept;
+    wire unused_system = cancel_system_i ^ head_valid ^ ^head_pc ^ ^rename_source ^ ^rename_source2 ^ ^read_ready ^ serial_accept ^ illegal_accept;
   end
 
   issue_backend backend (
-    .queue_skip_i(system_op), .head_read_i(head_read), .head_source_i({6'd0, system_source}),
+    .queue_skip_i(system_op), .head_read_i(head_read), .head_source_i(system_sources),
     .serial_offer_i(serial_offer), .serial_id_i(serial_id), .serial_event_i(serial_event), .serial_accept_o(serial_accept),
     .clk_i, .rst_i, .flush_i, .drained_i,
     .resources_ready_i((admitted & ~supported_o) == 0),
     .valid_i(admitted), .cfi_i(cfi), .solo_i(dispatch_solo), .rs1_i(rs1), .rs2_i(rs2), .rd_i(rd), .pc_i,
     .eligible_i(eligible), .payload_i(payload), .allocate_accept_o, .allocate_id_o,
-    .source1_o({unused_rename_source, rename_source}), .source2_o(), .destination_o(), .stale_o(), .source_ready_o(),
+    .source1_o({unused_rename_source, rename_source}), .source2_o({unused_rename_source2, rename_source2}), .destination_o(), .stale_o(), .source_ready_o(),
     .complete_offer_i(backend_complete_offer), .complete_solo_i(backend_complete_solo),
     .complete_id_i(backend_complete_id), .complete_event_i(backend_complete_event),
     .complete_accept_o(backend_complete_accept), .wb_accept_o, .wb_destination_o(), .wb_data_o(),

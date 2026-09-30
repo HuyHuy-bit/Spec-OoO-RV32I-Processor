@@ -18,7 +18,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: issue-backend-check
 .PHONY: integer-backend-check control-flow-backend-check fetch-two-wide-check fetch-execution-core-check frontend-faults-check
 .PHONY: system-core-check
-.PHONY: head-system-dispatch-check
+.PHONY: head-dispatch-check
 .PHONY: unit-runner-check
 .PHONY: head-system-backend-check
 .PHONY: serial-retirement-check
@@ -81,8 +81,8 @@ load-store-prepare-check:
 system-core-check:
 	@python3 tools/run_unit.py system_core --suite "$(OSS_CAD_SUITE)"
 
-head-system-dispatch-check:
-	@python3 tools/run_unit.py head_system_dispatch --suite "$(OSS_CAD_SUITE)"
+head-dispatch-check:
+	@python3 tools/run_unit.py head_dispatch --suite "$(OSS_CAD_SUITE)"
 
 unit-runner-check:
 	@python3 -m unittest -v tests/test_unit_runner.py
