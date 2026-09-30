@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "profile": "head_memory_execution_controller",
+  "sources": [
+    "rtl/generated/commit_event_pkg.sv",
+    "rtl/generated/platform_pkg.sv",
+    "rtl/core/single_lane_pkg.sv",
+    "rtl/frontend/decode_single.sv",
+    "rtl/execute/execute_single.sv",
+    "rtl/execute/load_store_prepare.sv",
+    "rtl/generated/memory_protocol_pkg.sv",
+    "rtl/execute/load_transaction.sv",
+    "rtl/execute/committed_store.sv",
+    "rtl/execute/mmio_store_transaction.sv",
+    "rtl/execute/data_port_arbiter.sv",
+    "rtl/execute/memory_transaction_path.sv",
+    "rtl/core/head_memory_controller.sv"
+  ],
+  "lint_config": "config/head_memory_controller.vlt",
+  "seeds": [
+    1,
+    42,
+    20260929
+  ],
+  "random_cases_per_seed": 500,
+  "scope": "Controller boundary connecting real address preparation and memory transaction engines to candidate architectural events. Synthetic head and acceptance inputs; no production fetched-core memory wiring, ROB/CSR atomic integration, cache admission producer, LSQ, forwarding, formal proof or clock claim.",
+  "prepare": "memory_valid/id/instruction/pc describe a legal held load/store. Read ownership requires exact raw live head identity and PC and idle controller/path, independently of source readiness. Both operands must be ready for prepare_o; unused and x0 tags are p0. One capture releases PRF reads. Keep the preparation register until actual serial or trap acceptance, masking repeat engine launch with launched state. The upstream descriptor must release on that same acceptance edge and must not reoffer the released ID/PC next cycle. prepare_o includes preparation-stage readiness, which depends structurally on accepted release. It must not drive an acceptance producer; use read_request_o for PRF ownership.",
+  "result": "After prepare, descriptor inputs and live PRF values are ignored. Registered prepared metadata and raw head ID/PC qualify offers. Successful loads/MMIO stores hold until serial_accept_i, an actual accepted solo ROB retirement, not readiness. Cached-store serial eligibility requires exact admission and commits bytes on that same accepted edge. The caller must qualify each controller acceptance separately; the system controller subtracts only its own serial acceptance from normal retirement count.",
+  "fault": "fault_offer is one raw ROB fault completion with original operands, pc_after=pc_before, zero rd/memory effects, address in trap_value. fault_accept records completion but does not consume the path result. trap_ready requires completion already accepted and the matching held fault result. Actual trap_accept releases it, including MMIO irrevocability. Existing downstream system controller must apply trap CSRs and redirect; gate its actual trap acceptance with this readiness for a memory fault.",
+  "admission": "Level descriptor view is stable while a prepared successful cacheable store is owned, independently of live-head/issue eligibility. admit_valid must refer to this outstanding view; a wrong ID cannot enable retirement. Producer must guarantee committed_store.json permissions/refill/resources and no later architectural write fault. No producer is supplied or tied high. A matching acceptance consumes the view. Cancellation withdraws it; recovery alone can preserve it.",
+  "recovery": "Use raw ROB head validity/identity/PC, not descriptor-valid or recovery-gated head signals. recovery stops preparation, path launches/grants and cached-store commit; it does not suppress load/MMIO result offers, raw fault completion or trap readiness. Accepted memory trap may coincide with recovery. cancel must originate directly from independent non-trap cancellation sources, never trap_accept-derived flush/killed even with a !trap_accept term; that would form a structural loop. Likewise recovery cannot depend on the shared serial acceptance. Owner cancellation and any acceptance are mutually exclusive. MMIO cancellation after grant is forbidden through success or fault result acceptance; integration must defer/forbid external flush/stop during this window.",
+  "ownership": "Controller busy includes the retained prepared owner, killed cached-load drain, committed-store drain and fatal. New preparation waits for all of them. Offered cached reads drain after cancellation. Committed writes survive subsequent cancellation/recovery. Fatal freezes until common reset; the target must suppress pre-reset responses. Reset is not rollback of committed stores or device effects.",
+  "verification": "Reuse shared unit runner, generated event/memory layouts and packing helpers. Independent whole-event oracle and byte-addressed target check controller wiring, readiness, ownership, acceptance, cancellation, response races and reset. Existing engine evidence covers detailed protocol matrices. Receipts are local source-bound evidence, not full-core acceptance.",
+  "descriptor_hold": "The preparation register remains valid and immutable until final retirement/trap acceptance or qualified cancellation. The internal transaction descriptor valid is temporarily suppressed when the raw head does not match. This controller-specific qualification is an exception to the standalone path producer hold convention: engines sample only on launch/commit, and the cacheable-store admission view remains stable independently of head qualification."
+}
