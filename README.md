@@ -28,24 +28,22 @@ the program correct, it:
 ### Simplified architecture
 
 ```mermaid
-flowchart LR
-    IMEM[(Instruction<br/>memory)]:::mem --> F[Fetch<br/>2-wide]:::front
-    F --> D[Decode]:::front
-    D --> R[Rename<br/>RAT + free list<br/>8 checkpoints]:::rename
+%%{init: {"flowchart": {"curve": "step", "nodeSpacing": 30, "rankSpacing": 40}}}%%
+flowchart TB
+    F[Fetch + Decode<br/>2-wide]:::front --> R[Rename<br/>8 checkpoints]:::rename
     R --> IQ[Issue queue<br/>16 entries]:::sched
-    R --> ROB[Reorder buffer<br/>32 entries]:::retire
-    IQ --> PRF[Physical register file<br/>64 regs]:::regs
-    PRF --> E0[Port 0<br/>ALU + branch]:::exec
-    PRF --> E1[Port 1<br/>ALU]:::exec
-    E0 & E1 -- writeback / wakeup --> PRF
-    E0 & E1 -- complete --> ROB
-    E0 -. mispredict, redirect .-> F
-    E0 -. restore checkpoint .-> R
-    ROB --> C[Retire<br/>2 per cycle]:::retire
-    ROB -- head op --> M[Head memory<br/>controller]:::memctl
-    M <--> DMEM[(Data<br/>memory)]:::mem
-    ROB -- head op --> CSR[CSR / trap unit]:::sys
-    CSR -. trap redirect .-> F
+    R --> ROB[Reorder buffer<br/>32 entries, retire 2/cycle]:::retire
+    IQ --> PRF[Physical register file<br/>64 registers]:::regs
+    PRF --> EX
+    subgraph EX[Execute]
+        E0[Port 0<br/>ALU + branch]:::exec
+        E1[Port 1<br/>ALU]:::exec
+    end
+    EX --> ROB
+    E0 -. mispredict .-> F
+    ROB --> MEM[Memory controller]:::memctl <--> DMEM[(Data memory)]:::mem
+    ROB --> CSR[CSR / trap unit]:::sys
+    CSR -. trap .-> F
 
     classDef front  fill:#4f9dde,stroke:#1f5f99,color:#fff
     classDef rename fill:#9b6dd6,stroke:#5e3a96,color:#fff
@@ -56,9 +54,11 @@ flowchart LR
     classDef memctl fill:#d4588f,stroke:#8c2d58,color:#fff
     classDef sys    fill:#8a8f99,stroke:#4d5159,color:#fff
     classDef mem    fill:#fff3c4,stroke:#b39b3c,color:#333
+    style EX fill:#eafaf0,stroke:#3cb371
 ```
 
-Solid arrows are data flow and dotted arrows are recovery or redirect. See the
+Solid arrows are data flow and dotted arrows redirect fetch after a branch
+mispredict or a trap. See the
 [detailed RTL diagram](docs/diagrams/rtl-overview.svg) and the
 [architecture guide](docs/architecture.md) for the real module hierarchy.
 
