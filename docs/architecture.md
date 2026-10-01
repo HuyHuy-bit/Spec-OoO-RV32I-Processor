@@ -1,4 +1,4 @@
-# RTL architecture and diagram guide
+# Architecture
 
 The diagrams describe the current working-tree implementation. They show
 functional RTL hierarchy and major interfaces, not clock-cycle stage boundaries
@@ -111,6 +111,51 @@ acceptance and recovery requirements. The
 [committed-store contract](../config/committed_store.json) define bus ownership
 and admission guarantees. The diagram's head-ownership/event block groups
 logic inside the controller; it is not another RTL module or metadata RAM.
+
+## Instruction set
+
+The [platform profile](../config/platform.yaml) targets **RV32I + Zicsr + Zifencei**,
+with 32-bit instructions, little-endian data, and machine-mode execution.
+Interrupts are disabled. This target is not a claim of full ISA acceptance.
+
+| Instruction family | Current fetched-core behavior |
+| --- | --- |
+| Integer arithmetic, logical, shift and comparison operations; LUI/AUIPC | Connected through the integer execution paths |
+| Conditional branches; JAL/JALR | Connected through execution port 0 and branch recovery |
+| CSR register/immediate forms | Serialized access to the implemented CSR set; illegal accesses trap |
+| MRET | Serialized trap return with an accepted redirect |
+| WFI | Serialized immediate-resume hint |
+| ECALL, EBREAK, illegal instructions and fetch faults | Precise trap path |
+| Loads and stores | Head-only execution with `MEMORY_SERVICE=1`; block dispatch when disabled |
+| FENCE | Serialized full ordering with `MEMORY_SERVICE=1`; waits for older data completion, including store write responses; blocks dispatch when disabled |
+| FENCE.I | Unsupported in the fetched core and blocks dispatch |
+
+The [system-core contract](../config/system_core.json) records the supported
+behavior and verification scope.
+
+## Execution flow
+
+For an ordinary integer instruction:
+
+1. **Fetch and decode:** obtain instruction bits and PC, classify the operation,
+   and retain any fault information.
+2. **Rename and allocate:** map sources to physical registers, allocate a
+   destination when needed, and reserve ROB/issue-queue space.
+3. **Wait and issue:** track source readiness and select eligible work for an
+   available execution port.
+4. **Execute and complete:** compute the result; on accepted completion, update
+   the PRF and make dependent operands ready.
+5. **Retire:** accept completed instructions from the ROB head in program order.
+
+These steps describe ownership and data flow, not fixed clock-cycle stages.
+Multiple instructions may occupy different parts of the flow simultaneously.
+
+A mispredicted branch discards younger work and restores the appropriate rename
+state. A fault waits until it reaches the ROB head before accepted trap entry
+updates architectural trap state. CSR/MRET/WFI instead use the serialized head
+controller and commit their successful effects atomically at retirement.
+External flush takes redirect priority over system redirects, which take
+priority over branch recovery.
 
 ## Diagram conventions and editing
 
