@@ -19,5 +19,11 @@
     "Transport fault injection remains in single-lane-check; this differential exercises architectural PMA faults.",
     "This receipt does not accept Architectural Slice."
   ],
-  "sail_binary_sha256": "46a321045d6ac14190c05c68504b8aaf9dd80756e44e82e37f5aff5543ab4a34"
+  "sail_binary_sha256": "46a321045d6ac14190c05c68504b8aaf9dd80756e44e82e37f5aff5543ab4a34",
+  "extra_modes": [
+    "reset_fetch",
+    "reset_data",
+    "reset_commit",
+    "stall_store"
+  ]
 }

@@ -9,7 +9,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: a1-check
 .PHONY: single-lane-check single-lane-synth-check
 .PHONY: act4-tools act4-core-check
-.PHONY: sail-log-check sail-differential-check
+.PHONY: sail-log-check sail-differential-check sail-fetched-differential-check
 .PHONY: architectural-slice-check architectural-slice-evidence-check architectural-slice-checker-test
 .PHONY: assert-portability
 .PHONY: rename-ownership-check rename-recovery-ownership-check
@@ -226,6 +226,9 @@ sail-log-check:
 
 sail-differential-check:
 	@python3 tools/run_sail_differential.py --sail "$(ACT4_SAIL)"
+
+sail-fetched-differential-check:
+	@python3 tools/run_sail_differential.py --dut fetched --sail "$(ACT4_SAIL)"
 
 single-lane-synth-check:
 	@python3 tools/run_single_lane.py --synth --mutations --suite "$(OSS_CAD_SUITE)"

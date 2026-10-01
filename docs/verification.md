@@ -34,6 +34,7 @@ make head-memory-check
 | `make system-core-check` | Connected fetch/integer/control/system core, including traps and redirects |
 | `make memory-core-check` | Fetched loads/stores, FENCE ordering, FENCE.I self-modifying code, real retirement/traps, admission, cancellation and data-port ownership |
 | `make head-memory-check` | Standalone memory controller with synthetic head/acceptance inputs and real transaction engines |
+| `make sail-fetched-differential-check` | Real RV32 programs on the fetched memory core (`MEMORY_SERVICE=1`) compared event-by-event with the pinned Sail model: 3 seeds plus stall and reset schedules, comparator mutations and failure negatives. A bounded corpus, not ACT4 or full ISA acceptance |
 
 The [Makefile](../Makefile) and [unit profiles](../tools/unit_profiles.py)
 define the individual per-block gates (`make <block>-check`). Generated outputs

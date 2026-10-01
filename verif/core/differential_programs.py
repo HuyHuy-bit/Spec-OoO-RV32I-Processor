@@ -5,7 +5,7 @@ import struct
 from verif.core.programs import i, r, store, branch, jal, csr, constant
 
 
-def program(seed):
+def program(seed, self_modifying=False):
     boot = [i(31,0,256), csr(0,31,0x305,1), *constant(31,0x1800), csr(0,31,0x300,1)]
     boot += [jal(0,0x400-4*len(boot))]
     words = [i(reg,0,reg*13-512) for reg in range(1,32)]
@@ -44,6 +44,12 @@ def program(seed):
     # The fetch-fault handler uses x29 as a return address outside the faulting region.
     resume = 0x400+(len(words)+5)*4
     words += constant(29,resume)+constant(28,0x10000000)+[i(0,28,0,0,0x67)]
+    if self_modifying:
+        # Replace already-fetched code with word/byte stores, then FENCE.I mid-line or at a line end.
+        for size, offset, value, slot in ((2,0,i(12,0,0x2c3),3),(0,3,0xa5,3),(2,0,i(12,0,0x5a5),7)):
+            while (len(words)+5) % 8 != slot: words.append(i(0,0,0))
+            target = 0x400+4*(len(words)+6)
+            words += constant(28,target)+constant(27,value)+[store(28,27,offset,size), 0x100f, i(12,0,0x111)]
     words += constant(28,0x8000)
     rng = random.Random(seed)
     for _ in range(600):
@@ -57,6 +63,8 @@ def program(seed):
             words += [store(28,a,offset,size), i(rd,28,offset,size+4 if size<2 and rng.randrange(2) else size,3)]
         else:
             words += [branch(a,b,8,rng.choice((0,1,4,5,6,7))), i(rd,rd,1)]
+    # A final store makes completion depend on draining a committed write.
+    if self_modifying: words += [store(28,27,4,2)]
     words += [branch(0,0,0)]
     image = bytearray(0x400+4*len(words))
     handler = [csr(30,0,0x342,2),i(31,0,1),branch(30,31,12,1),csr(0,29,0x341,1),0x30200073,

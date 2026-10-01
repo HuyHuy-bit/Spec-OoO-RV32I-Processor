@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "profile": "fetched_memory_core_sail_differential",
+  "dut": "fetch_execution_core with config/memory_core.json parameters (FRONTEND_FAULTS=1, TRAP_SERVICE=1, MEMORY_SERVICE=1)",
+  "seeds": [
+    1,
+    42,
+    20260906
+  ],
+  "extra_modes": [
+    "stall",
+    "reset_fetch",
+    "reset_data",
+    "reset_commit"
+  ],
+  "instruction_limit": 2500,
+  "sail_override": {
+    "platform": {
+      "instructions_per_tick": 1000000000
+    }
+  },
+  "target": "verif/core/fetched_core_tb.cpp loads the image into one byte memory shared by the instruction and data ports. Reads are captured at request acceptance and writes land at their response. The infallible RAM target is the explicit external admission guarantor: admission is echoed for every offered cacheable store. It is not a production admission producer.",
+  "events": "Both accepted retirement lanes, oldest first, and accepted traps are printed from the retirement/trap handshakes. Nothing is derived from writeback, bus responses or a bench reference model.",
+  "completion": "A run passes only after exactly the Sail event count retires (retirement is then withheld), no fatal occurs, every committed store and MMIO transaction drains and matches its retired event, and the trace equals Sail. A fatal, watchdog, undrained write or short trace fails.",
+  "counters": "Differential programs must not read machine timing counters; the runner rejects any such encoding. Counter behavior stays in the directed CSR and memory-core tests.",
+  "limitations": [
+    "Sail 0.10 has different fixed-CSR and machine-counter policies: writes to misa/mie/mip and machine-counter accesses remain in dedicated RTL tests.",
+    "The timer tick interval exceeds each run so Sail does not raise CLINT interrupts in the interrupt-disabled profile.",
+    "Transport fault injection remains in memory-core-check; this differential exercises architectural PMA faults.",
+    "Self-modifying code is covered only where FENCE.I orders it.",
+    "This is not ACT4 acceptance, Spike differential, full ISA coverage, formal proof or two-wide phase closure."
+  ],
+  "sail_binary_sha256": "46a321045d6ac14190c05c68504b8aaf9dd80756e44e82e37f5aff5543ab4a34"
+}
