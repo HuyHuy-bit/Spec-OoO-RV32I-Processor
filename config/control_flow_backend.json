@@ -7,6 +7,7 @@
   "identity_bits": 13,
   "producer_slots": 2,
   "sources": [
+    "rtl/generated/memory_protocol_pkg.sv",
     "rtl/generated/platform_pkg.sv",
     "rtl/core/single_lane_pkg.sv",
     "rtl/frontend/decode_single.sv",

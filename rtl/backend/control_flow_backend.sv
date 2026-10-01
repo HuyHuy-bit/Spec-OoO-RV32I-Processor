@@ -1,7 +1,21 @@
 `default_nettype none
-module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
+module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0, parameter bit MEMORY_SERVICE = 0) (
   input wire clk_i, rst_i, flush_i, drained_i,
   input wire cancel_system_i,
+  input wire memory_issue_allowed_i, admit_valid_i,
+  input wire [12:0] admit_id_i,
+  output wire admission_valid_o,
+  output wire [12:0] admission_id_o,
+  output wire [31:0] admission_address_o, admission_data_o,
+  output wire [3:0] admission_mask_o,
+  output wire [1:0] admission_size_o,
+  output wire memory_prepare_o, memory_busy_o, memory_committed_o, memory_irrevocable_o, memory_fatal_o,
+  output wire data_request_valid_o,
+  input wire data_request_ready_i,
+  output memory_protocol_pkg::mem_request_t data_request_o,
+  input wire data_response_valid_i,
+  output wire data_response_ready_o,
+  input memory_protocol_pkg::mem_response_t data_response_i,
   output wire system_prepare_o, system_busy_o, system_redirect_o,
   output wire [31:0] system_redirect_pc_o,
   output wire system_trap_valid_o,
@@ -39,22 +53,29 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
   import single_lane_pkg::*;
   decoded_t [1:0] decoded;
   wire [9:0] rs1, rs2, rd;
-  wire [1:0] cfi, selected, producer_ready, system_op, admitted, dispatch_solo;
+  wire [1:0] cfi, selected, producer_ready, system_op, memory_op, serial_op, admitted, dispatch_solo;
   wire [5:0] rename_source, rename_source2, unused_rename_source, unused_rename_source2;
-  wire read_ready;
-  wire [2:0] unused_read_ready;
+  wire [1:0] read_ready, unused_read_ready;
   wire head_valid, head_read, serial_offer, serial_accept, illegal_offer, illegal_accept, backend_trap_ready;
   wire [12:0] serial_id, illegal_id;
   wire [31:0] head_pc;
   commit_event_pkg::commit_event_t serial_event, illegal_event;
   wire [1:0] backend_complete_accept;
-  wire [1:0] backend_complete_offer = illegal_offer ? {1'b0, completion_enable_i[0]} : completion_valid_o & completion_enable_i;
-  wire [25:0] backend_complete_id = illegal_offer ? {13'd0, illegal_id} : completion_id_o;
-  wire [1:0] backend_complete_solo = illegal_offer ? 2'b01 : 2'b00;
+  wire memory_serial_offer, memory_fault_offer, memory_trap_ready, memory_read;
+  wire [12:0] memory_serial_id, memory_fault_id;
+  commit_event_pkg::commit_event_t memory_serial_event, memory_fault_event;
+  wire raw_offer = illegal_offer || memory_fault_offer;
+  wire [12:0] raw_id = memory_fault_offer ? memory_fault_id : illegal_id;
+  commit_event_pkg::commit_event_t raw_event;
+  assign raw_event = memory_fault_offer ? memory_fault_event : illegal_event;
+  assign serial_op = system_op | memory_op;
+  wire [1:0] backend_complete_offer = raw_offer ? {1'b0, completion_enable_i[0]} : completion_valid_o & completion_enable_i;
+  wire [25:0] backend_complete_id = raw_offer ? {13'd0, raw_id} : completion_id_o;
+  wire [1:0] backend_complete_solo = raw_offer ? 2'b01 : 2'b00;
   wire [11:0] system_sources;
   commit_event_pkg::commit_event_t [1:0] backend_complete_event;
-  assign backend_complete_event = illegal_offer ? {commit_event_pkg::commit_event_t'('0), illegal_event} : completion_event_o;
-  assign completion_accept_o = illegal_offer ? 2'b00 : backend_complete_accept;
+  assign backend_complete_event = raw_offer ? {commit_event_pkg::commit_event_t'('0), raw_event} : completion_event_o;
+  assign completion_accept_o = raw_offer ? 2'b00 : backend_complete_accept;
   assign illegal_accept = illegal_offer && backend_complete_accept[0];
   wire [3:0] eligible;
   wire [127:0] issue_payload, read_data;
@@ -78,8 +99,9 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
     assign payload[lane*64 +: 64] = {frontend_fault_i[lane] ? 32'd0 : pc_i[lane*32 +: 32], executable_instruction[lane*32 +: 32]};
     decode_single decode (.instruction_i(executable_instruction[lane*32 +: 32]), .decoded_o(decoded[lane]));
     assign system_op[lane] = SYSTEM_SERVICE && !frontend_fault_i[lane] && decoded[lane].op inside {OP_CSR, OP_MRET, OP_WFI};
+    assign memory_op[lane] = MEMORY_SERVICE && !frontend_fault_i[lane] && decoded[lane].op inside {OP_LOAD, OP_STORE};
     assign cfi[lane] = decoded[lane].op inside {OP_BRANCH, OP_JAL, OP_JALR};
-    assign supported_o[lane] = frontend_fault_i[lane] || ((cfi[lane] || system_op[lane] || decoded[lane].op inside {OP_ALU, OP_LUI, OP_AUIPC})
+    assign supported_o[lane] = frontend_fault_i[lane] || ((cfi[lane] || serial_op[lane] || decoded[lane].op inside {OP_ALU, OP_LUI, OP_AUIPC})
       && pc_i[lane*32 +: 2] == 0);
     assign rs1[lane*5 +: 5] = decoded[lane].rs1;
     assign rs2[lane*5 +: 5] = decoded[lane].rs2;
@@ -143,39 +165,77 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
   );
 
   if (SYSTEM_SERVICE) begin : systems
-    wire descriptor_busy, killed;
+    wire descriptor_busy, killed, owner_valid, owner_memory, system_offer, system_trap_valid;
+    wire [12:0] system_serial_id;
+    commit_event_pkg::commit_event_t system_serial_event, system_trap_event;
     wire [12:0] system_id;
-    wire [31:0] system_instruction, unused_pc;
+    wire [31:0] system_instruction, owner_pc;
+    wire memory_head = owner_memory && system_id == head_id_o;
+    assign head_read = (owner_valid && !owner_memory) || memory_read;
+    assign serial_offer = system_offer || memory_serial_offer;
+    assign serial_id = memory_serial_offer ? memory_serial_id : system_serial_id;
+    assign serial_event = memory_serial_offer ? memory_serial_event : system_serial_event;
+    assign system_trap_valid_o = system_trap_valid && (!memory_head || memory_trap_ready);
+    assign system_trap_event_o = system_trap_valid_o ? system_trap_event : '0;
     head_dispatch dispatch (
       .clk_i, .rst_i, .flush_i(flush_i || trap_accept_o || cancel_system_i), .drained_i,
-      .valid_i(selected), .serial_i(system_op), .cfi0_i(cfi[0]), .memory_i(1'b0),
+      .valid_i(selected), .serial_i(serial_op), .cfi0_i(cfi[0]), .memory_i(memory_op[0]),
       .instruction_i(instruction_i[31:0]), .pc_i(pc_i[31:0]),
       .dispatch_valid_o(admitted), .dispatch_solo_o(dispatch_solo),
       .allocate_accept_i(allocate_accept_o), .allocate_id_i(allocate_id_o[12:0]), .source1_i(rename_source[5:0]), .source2_i(rename_source2),
       .queue_dispatch_o(), .head_valid_i(head_valid), .head_id_i(head_id_o), .head_pc_i(head_pc),
       .recover_i(redirect_o), .recover_slot_i(resolve_id_o[4:0]),
       .retire_accept_i(serial_accept), .retire_id_i(serial_id),
-      .busy_o(descriptor_busy), .owner_valid_o(head_read), .killed_o(killed),
-      .owner_id_o(system_id), .owner_instruction_o(system_instruction), .owner_pc_o(unused_pc), .owner_sources_o(system_sources), .owner_memory_o()
+      .busy_o(descriptor_busy), .owner_valid_o(owner_valid), .killed_o(killed),
+      .owner_id_o(system_id), .owner_instruction_o(system_instruction), .owner_pc_o(owner_pc), .owner_sources_o(system_sources), .owner_memory_o(owner_memory)
     );
     head_system_controller head (
       .clk_i, .rst_i, .cancel_i(flush_i || cancel_system_i), .retire_accept_i(retire_accept_o),
       .head_valid_i(head_valid), .head_id_i(head_id_o), .head_pc_i(head_pc),
-      .system_valid_i(head_read), .system_id_i(system_id), .instruction_i(system_instruction),
-      .source_ready_i(read_ready), .source_i(read_data[31:0]),
+      .system_valid_i(owner_valid && !owner_memory), .system_id_i(system_id), .instruction_i(system_instruction),
+      .source_ready_i(read_ready[0]), .source_i(read_data[31:0]),
       .prepare_o(system_prepare_o), .busy_o(system_busy_o),
       .fault_valid_i(fault_pending_o), .fault_event_i(fault_event_o),
-      .serial_offer_o(serial_offer), .serial_id_o(serial_id), .serial_event_o(serial_event), .serial_accept_i(serial_accept),
+      .serial_offer_o(system_offer), .serial_id_o(system_serial_id), .serial_event_o(system_serial_event), .serial_accept_i(serial_accept && system_offer),
       .illegal_offer_o(illegal_offer), .illegal_id_o(illegal_id), .illegal_event_o(illegal_event), .illegal_accept_i(illegal_accept),
-      .trap_valid_o(system_trap_valid_o), .trap_event_o(system_trap_event_o), .trap_accept_i(trap_accept_o),
+      .trap_valid_o(system_trap_valid), .trap_event_o(system_trap_event), .trap_accept_i(trap_accept_o),
       .redirect_o(system_redirect_o), .redirect_pc_o(system_redirect_pc_o)
     );
+    if (MEMORY_SERVICE) begin : memory_service
+      wire [11:0] unused_fatal;
+      head_memory_controller memory_head_controller (
+        .clk_i, .rst_i, .recovery_i(flush_i || redirect_o || trap_accept_o), .cancel_i(flush_i),
+        .memory_valid_i(owner_valid && owner_memory && !cancel_system_i),
+        .memory_id_i(system_id), .instruction_i(system_instruction), .pc_i(owner_pc),
+        .head_valid_i(head_valid), .head_id_i(head_id_o), .head_pc_i(head_pc),
+        .source_ready_i(read_ready), .source1_i(read_data[31:0]), .source2_i(read_data[63:32]),
+        .issue_allowed_i(memory_issue_allowed_i), .read_request_o(memory_read),
+        .prepare_o(memory_prepare_o), .busy_o(memory_busy_o),
+        .admission_valid_o, .admission_id_o, .admission_address_o, .admission_data_o,
+        .admission_mask_o, .admission_size_o, .admit_valid_i, .admit_id_i,
+        .serial_offer_o(memory_serial_offer), .serial_id_o(memory_serial_id), .serial_event_o(memory_serial_event),
+        .serial_accept_i(serial_accept && memory_serial_offer),
+        .fault_offer_o(memory_fault_offer), .fault_id_o(memory_fault_id), .fault_event_o(memory_fault_event),
+        .fault_accept_i(memory_fault_offer && backend_complete_accept[0]),
+        .trap_ready_o(memory_trap_ready), .trap_accept_i(trap_accept_o && memory_head),
+        .committed_o(memory_committed_o), .irrevocable_o(memory_irrevocable_o), .fatal_o(memory_fatal_o),
+        .fatal_sources_o(unused_fatal[11:8]), .fatal_reason_o(unused_fatal[7:0]),
+        .request_valid_o(data_request_valid_o), .request_ready_i(data_request_ready_i), .request_o(data_request_o),
+        .response_valid_i(data_response_valid_i), .response_ready_o(data_response_ready_o), .response_i(data_response_i)
+      );
+    end
+    if (!MEMORY_SERVICE) begin : unused_memory_owner
+      wire unused_owner = ^owner_pc ^ read_ready[1];
+    end
     assign backend_trap_ready = system_trap_valid_o && trap_ready_i;
 `ifndef SYNTHESIS
     always_ff @(posedge clk_i) if (!rst_i) begin
       assert (!(system_busy_o && redirect_o)) else $fatal(1, "CF_SYSTEM_RECOVERY");
+      assert (!(system_offer && memory_serial_offer) && !(illegal_offer && memory_fault_offer))
+        else $fatal(1, "CF_HEAD_EXCLUSIVE");
+      assert (!memory_irrevocable_o || !redirect_o) else $fatal(1, "CF_MEMORY_RECOVERY");
       assert (!head_read || issue_o == 0) else $fatal(1, "CF_SYSTEM_READ");
-      assert (!drained_i || (!descriptor_busy && !system_busy_o)) else $fatal(1, "CF_SYSTEM_DRAIN");
+      assert (!drained_i || (!descriptor_busy && !system_busy_o && !memory_busy_o)) else $fatal(1, "CF_SYSTEM_DRAIN");
       assert (!killed || !system_prepare_o) else $fatal(1, "CF_SYSTEM_CANCEL");
     end
 `endif
@@ -197,11 +257,25 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0) (
     assign system_redirect_pc_o = 0;
     assign system_trap_valid_o = 0;
     assign system_trap_event_o = '0;
-    wire unused_system = cancel_system_i ^ head_valid ^ ^head_pc ^ ^rename_source ^ ^rename_source2 ^ ^read_ready ^ serial_accept ^ illegal_accept;
+    wire unused_system = cancel_system_i ^ head_valid ^ ^head_pc ^ ^rename_source ^ ^rename_source2 ^ ^read_ready ^ serial_accept ^ illegal_accept ^ memory_serial_offer ^ memory_trap_ready ^ memory_read ^ ^memory_serial_id ^ ^memory_serial_event;
+  end
+
+  if (!MEMORY_SERVICE) begin : no_memory
+    assign {memory_prepare_o, memory_busy_o, memory_committed_o, memory_irrevocable_o, memory_fatal_o} = 0;
+    assign {memory_read, memory_serial_offer, memory_fault_offer, memory_trap_ready} = 0;
+    assign {memory_serial_id, memory_fault_id, admission_id_o} = 0;
+    assign {memory_serial_event, memory_fault_event, data_request_o} = '0;
+    assign {admission_valid_o, admission_address_o, admission_data_o, admission_mask_o, admission_size_o} = 0;
+    assign {data_request_valid_o, data_response_ready_o} = 0;
+    wire unused_memory = memory_issue_allowed_i ^ admit_valid_i ^ ^admit_id_i ^ data_request_ready_i
+      ^ data_response_valid_i ^ ^data_response_i;
+  end
+  if (MEMORY_SERVICE && !SYSTEM_SERVICE) begin : invalid_memory_configuration
+    initial $error("MEMORY_SERVICE_REQUIRES_SYSTEM_SERVICE");
   end
 
   issue_backend backend (
-    .queue_skip_i(system_op), .head_read_i(head_read), .head_source_i(system_sources),
+    .queue_skip_i(serial_op), .head_read_i(head_read), .head_source_i(system_sources),
     .serial_offer_i(serial_offer), .serial_id_i(serial_id), .serial_event_i(serial_event), .serial_accept_o(serial_accept),
     .clk_i, .rst_i, .flush_i, .drained_i,
     .resources_ready_i((admitted & ~supported_o) == 0),

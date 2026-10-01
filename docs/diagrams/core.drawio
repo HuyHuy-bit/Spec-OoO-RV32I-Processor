@@ -5,7 +5,7 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" value="RV32I speculative out-of-order core — connected RTL" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=27;strokeColor=none;fillColor=none;align=left;spacing=0;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="title" value="RV32I speculative out-of-order core — MEMORY_SERVICE=0" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=27;strokeColor=none;fillColor=none;align=left;spacing=0;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="40" y="22" width="1650" height="38" />
         </mxCell>
         <mxCell id="env" value="Environment controls: clk / reset, enable, flush / PC, drain, execution / completion / resolution throttles, retirement / trap readiness" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=14;" vertex="1" parent="1">
@@ -225,13 +225,13 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" value="Head memory controller — implemented subsystem, core integration pending" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=25;strokeColor=none;fillColor=none;align=left;spacing=0;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="title" value="Head memory controller — MEMORY_SERVICE=1" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=25;strokeColor=none;fillColor=none;align=left;spacing=0;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="40" y="22" width="1680" height="40" />
         </mxCell>
         <mxCell id="controller" value="head_memory_controller" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=left;verticalAlign=top;spacingLeft=14;spacingTop=10;fontStyle=1;fontSize=19;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="340" y="175" width="1190" height="850" />
         </mxCell>
-        <mxCell id="caller" value="Caller interface&#10;&#10;Instruction / PC / full ID&#10;PRF operands + readiness&#10;Raw ROB head ID / PC&#10;Accepted retire / fault / trap&#10;&#10;Testbench supplies it today" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=15;" vertex="1" parent="1">
+        <mxCell id="caller" value="Caller interface&#10;&#10;Instruction / PC / full ID&#10;PRF operands + readiness&#10;Raw ROB head ID / PC&#10;Accepted retire / fault / trap&#10;&#10;Core backend supplies it" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#ffffff;align=center;verticalAlign=middle;spacing=8;fontSize=15;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="30" y="280" width="230" height="240" />
         </mxCell>
         <mxCell id="ownership" value="Head ownership / event logic&#10;&#10;Head qualification&#10;Serial / fault event assembly&#10;Completion / trap ownership" style="rounded=0;html=0;whiteSpace=nowrap;fontFamily=Arial;fontColor=#111111;strokeColor=#111111;strokeWidth=1.5;shadow=0;fillColor=#f1f1f1;align=center;verticalAlign=middle;spacing=8;fontSize=15;" vertex="1" parent="controller">

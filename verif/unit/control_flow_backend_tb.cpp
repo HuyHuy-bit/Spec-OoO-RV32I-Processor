@@ -179,6 +179,9 @@ public:
                 if (ready) { pick[port] = int(n); break; }
             }
         }
+        dut.memory_issue_allowed_i=0; dut.admit_valid_i=0; dut.admit_id_i=0;
+        dut.data_request_ready_i=0; dut.data_response_valid_i=0;
+        for (unsigned n=0;n<10;n++) dut.data_response_i[n]=0;
         dut.trap_ready_i = 0;
         dut.cancel_system_i=0;
         dut.clk_i = 0; dut.rst_i = in.reset; dut.flush_i = in.flush; dut.drained_i = in.drain;

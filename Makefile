@@ -82,6 +82,10 @@ load-transaction-formal-check:
 load-store-prepare-check:
 	@python3 tools/run_unit.py load_store_prepare --suite "$(OSS_CAD_SUITE)"
 
+.PHONY: memory-core-check
+memory-core-check:
+	@python3 tools/run_unit.py memory_core --suite "$(OSS_CAD_SUITE)"
+
 system-core-check:
 	@python3 tools/run_unit.py system_core --suite "$(OSS_CAD_SUITE)"
 

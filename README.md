@@ -6,8 +6,8 @@ through verification toward a LibreLane GDSII implementation.
 
 The current core connects instruction fetch, register renaming, out-of-order
 integer execution, branch recovery, in-order retirement, and machine-mode
-system/trap handling. The load/store subsystem is implemented and tested
-separately; connecting it to the fetched core is the next integration step.
+system/trap handling. An opt-in memory profile connects conservative head-only
+loads and stores through the real PRF, ROB, and CSR trap path.
 
 ## Contents
 
@@ -18,6 +18,7 @@ separately; connecting it to the fetched core is the next integration step.
 - [Simulation and verification](#simulation-and-verification)
 - [Next steps](#next-steps)
 - [Repository layout](#repository-layout)
+- [References](#references)
 - [Author](#author)
 
 ## Overview
@@ -47,14 +48,18 @@ implemented RTL; remaining integration and physical work are listed separately.
 
 ![Connected RTL overview](docs/diagrams/rtl-overview.svg)
 
+The overview shows the default `MEMORY_SERVICE=0` profile.
 Solid arrows carry payload/interface traffic; dashed arrows show control; gray
 blocks contain clocked state. See the [architecture guide](docs/architecture.md)
 for exact module links, configuration, and diagram conventions, or open the
 [editable draw.io source](docs/diagrams/core.drawio).
 
 The current top is [`fetch_execution_core`](rtl/core/fetch_execution_core.sv).
-Its external interfaces include instruction memory, retirement/trap traces,
-and readiness/recovery controls. It does not yet expose a data-memory port.
+Its external interfaces include separate instruction/data memory channels,
+retirement/trap traces, and readiness/recovery controls. Enable
+`MEMORY_SERVICE=1` with `TRAP_SERVICE=1` for the
+[`memory_core` profile](config/memory_core.json); data outputs are inactive
+in the default memory-disabled profile.
 
 | Resource | Current configuration |
 | --- | --- |
@@ -91,7 +96,8 @@ Trap entry updates the shared machine CSR bank and redirects fetch.
 
 The [`head_memory_controller`](rtl/core/head_memory_controller.sv) combines
 address preparation, transaction ownership, and retirement/trap event handling.
-It currently runs under its own testbench, independently of the fetched core.
+It connects to the fetched backend when `MEMORY_SERVICE=1`, sharing the head
+dispatcher and PRF reads with system operations.
 Two-headed arrows bundle request, response, and handshake directions.
 
 - **Preparation:** capture operands and the effective address, check alignment
@@ -105,8 +111,9 @@ Two-headed arrows bundle request, response, and handshake directions.
   engines and route responses to their owner.
 
 Here, “cacheable” is an address attribute; the path does not contain a cache.
-Core integration, a real store-admission producer, a load/store queue, and
-store-to-load forwarding remain pending.
+A real store-admission producer, a load/store queue, and store-to-load
+forwarding remain pending. External flush must wait for `flush_ready_o` while
+MMIO ownership is irrevocable; accepted cached stores continue draining.
 
 ## Instruction set
 
@@ -122,7 +129,7 @@ Interrupts are disabled. This target is not a claim of full ISA acceptance.
 | MRET | Serialized trap return with an accepted redirect |
 | WFI | Serialized immediate-resume hint |
 | ECALL, EBREAK, illegal instructions and fetch faults | Precise trap path |
-| Loads and stores | Separate transaction subsystem; unsupported in the fetched core and block dispatch |
+| Loads and stores | Head-only execution with `MEMORY_SERVICE=1`; block dispatch when disabled |
 | FENCE and FENCE.I | Unsupported in the fetched core and block dispatch |
 
 An unsupported operation in the admitted prefix blocks allocation of that whole
@@ -174,12 +181,13 @@ fail the runner's hash checks. Tool requirements are recorded in
 [`config/synthesis.lock`](config/synthesis.lock).
 
 From the repository root, set `LOCKSTEP_SPIKE` to that checkout's `build/spike`
-for the reference checks. Set `OSS_CAD_SUITE` for the two RTL unit gates:
+for the reference checks. Set `OSS_CAD_SUITE` for the RTL unit gates:
 
 ```sh
 make check-fast LOCKSTEP_SPIKE=/path/to/riscv-isa-sim/build/spike
 export OSS_CAD_SUITE=/path/to/oss-cad-suite
 make system-core-check
+make memory-core-check
 make head-memory-check
 ```
 
@@ -187,6 +195,7 @@ make head-memory-check
 | --- | --- |
 | `make check-fast` | Foundation, schema, model and reference checks; not the complete two-wide core regression |
 | `make system-core-check` | Connected fetch/integer/control/system core, including traps and redirects |
+| `make memory-core-check` | Fetched load/store programs, real retirement/traps, admission, cancellation and data-port ownership |
 | `make head-memory-check` | Standalone memory controller with synthetic head/acceptance inputs and real transaction engines |
 
 The [Makefile](Makefile) and [unit profiles](tools/unit_profiles.py) define the
@@ -194,8 +203,7 @@ individual gates. Generated outputs and full evidence archives stay local.
 
 ## Next steps
 
-- Connect the head-memory controller to the fetched core and implement its
-  production store-admission interface.
+- Implement the producer behind the cached-store admission interface.
 - Add the remaining memory ordering, load/store queue, forwarding, cache,
   fence, and dynamic prediction functionality.
 - Complete the selected ISA and integrated-core verification gates.
@@ -213,6 +221,56 @@ The project follows the direct ASIC flow. Full-core frequency, physical closure,
 | [`verif/`](verif/) | RTL benches, reference models and formal harnesses |
 | [`tools/`](tools/) | Shared generation and verification runners |
 | [`docs/`](docs/) | Architecture documentation and editable diagrams |
+
+## References
+
+### Architecture and design
+
+- [RISC-V Unprivileged ISA](https://docs.riscv.org/reference/isa/unpriv/unpriv-index.html)
+  and [Privileged Architecture](https://docs.riscv.org/reference/isa/priv/priv-index.html):
+  instruction semantics, machine CSRs, and precise traps.
+- [BOOM](https://docs.boom-core.org/en/latest/): register renaming, branch recovery,
+  allocation lists, and register-file/bypass trade-offs.
+- [RSD](https://github.com/rsd-devel/rsd): an RV32 SystemVerilog out-of-order
+  comparison design.
+- [FROST](https://github.com/twosigma/frost): completion holding and layered
+  verification; [Coreblocks](https://github.com/kuznia-rdzeni/coreblocks): block
+  testing and full-core integration.
+- [CVA6](https://docs.openhwgroup.org/projects/cva6-user-manual/03_cva6_design/issue_stage.html):
+  issue handshakes and transaction-ID tracking.
+
+These processor projects were studied as design comparisons; their RTL is not
+incorporated into this core.
+
+### Research papers
+
+- [*Complexity-Effective Superscalar Processors*](https://www.cs.cmu.edu/afs/cs/academic/class/15740-f19/www/papers/isca97-palacharla-complexity.pdf),
+  Palacharla, Jouppi and Smith, ISCA 1997: timing costs of rename, wakeup/select,
+  and bypass logic; motivation for measuring the clock/complexity trade-off.
+- [*Memory Dependence Prediction Using Store Sets*](https://people.csail.mit.edu/emer/media/papers/1998.06.isca.storesets.pdf),
+  Chrysos and Emer, ISCA 1998: reference for the optional store-set study.
+  Store-set prediction is not implemented.
+
+### Verification and implementation tools
+
+- [Spike](https://github.com/riscv-software-src/riscv-isa-sim),
+  [Sail RISC-V](https://github.com/riscv/sail-riscv), and
+  [RISC-V Architectural Tests](https://github.com/riscv/riscv-arch-test):
+  reference-model comparisons and selected architectural tests on the earlier
+  serialized core.
+- [RVFI](https://github.com/YosysHQ/riscv-formal/blob/main/docs/source/rvfi.rst):
+  reference for the architectural event format, with explicit project deviations;
+  this is not a full-core riscv-formal acceptance claim.
+- [Verilator](https://verilator.org/guide/latest/),
+  [Yosys](https://yosyshq.readthedocs.io/projects/yosys/en/stable/),
+  [Yosys Slang frontend](https://github.com/povik/yosys-slang), and
+  [SymbiYosys](https://yosyshq.readthedocs.io/projects/sby/en/stable/):
+  RTL simulation, synthesis, and focused formal checks.
+- [OpenSTA](https://github.com/The-OpenROAD-Project/OpenSTA) and
+  [SKY130 standard-cell data](https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd):
+  early timing-feasibility probes, not full-core timing closure.
+- [LibreLane](https://librelane.readthedocs.io/en/stable/): the planned
+  RTL-to-GDSII implementation flow.
 
 ## Author
 

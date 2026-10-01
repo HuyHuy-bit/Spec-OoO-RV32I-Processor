@@ -1,6 +1,21 @@
 `default_nettype none
-module fetch_execution_core #(parameter bit FRONTEND_FAULTS = 1, parameter bit TRAP_SERVICE = 1) (
+module fetch_execution_core #(parameter bit FRONTEND_FAULTS = 1, parameter bit TRAP_SERVICE = 1, parameter bit MEMORY_SERVICE = 0) (
   input wire clk_i, rst_i, enable_i, flush_i, drained_i,
+  input wire memory_issue_allowed_i, admit_valid_i,
+  input wire [12:0] admit_id_i,
+  output wire admission_valid_o,
+  output wire [12:0] admission_id_o,
+  output wire [31:0] admission_address_o, admission_data_o,
+  output wire [3:0] admission_mask_o,
+  output wire [1:0] admission_size_o,
+  output wire memory_prepare_o, memory_busy_o, memory_committed_o, memory_irrevocable_o, memory_fatal_o,
+  output wire flush_ready_o,
+  output wire data_request_valid_o,
+  input wire data_request_ready_i,
+  output memory_protocol_pkg::mem_request_t data_request_o,
+  input wire data_response_valid_i,
+  output wire data_response_ready_o,
+  input memory_protocol_pkg::mem_response_t data_response_i,
   input wire [31:0] flush_pc_i,
   output wire request_valid_o,
   input wire request_ready_i,
@@ -27,6 +42,9 @@ module fetch_execution_core #(parameter bit FRONTEND_FAULTS = 1, parameter bit T
   output wire system_prepare_o, system_busy_o,
   output wire identity_drain_o, fatal_o
 );
+  wire fetch_fatal;
+  assign fatal_o = fetch_fatal || memory_fatal_o;
+  assign flush_ready_o = !memory_irrevocable_o;
   wire [1:0] supported, backend_valid, frontend_fault;
   wire [63:0] frontend_cause, frontend_value;
   if (FRONTEND_FAULTS) begin : faults
@@ -51,14 +69,19 @@ module fetch_execution_core #(parameter bit FRONTEND_FAULTS = 1, parameter bit T
   assign unsupported_o = fetch_valid_o & ~supported & {2{!fetch_fault_o}};
 
   fetch_two_wide frontend (
-    .clk_i, .rst_i, .enable_i(enable_i && !drained_i),
+    .clk_i, .rst_i, .enable_i(enable_i && !drained_i && !memory_fatal_o),
     .redirect_i(redirect_o), .redirect_pc_i(redirect_pc_o),
     .request_valid_o, .request_ready_i, .request_o,
     .response_valid_i, .response_ready_o, .response_i,
     .valid_o(fetch_valid_o), .take_i(dispatch_o), .instruction_o(fetch_instruction_o), .pc_o(fetch_pc_o),
-    .fault_o(fetch_fault_o), .fault_cause_o(fetch_fault_cause_o), .busy_o(fetch_busy_o), .fatal_o
+    .fault_o(fetch_fault_o), .fault_cause_o(fetch_fault_cause_o), .busy_o(fetch_busy_o), .fatal_o(fetch_fatal)
   );
-  control_flow_backend #(.SYSTEM_SERVICE(TRAP_SERVICE)) backend (
+  control_flow_backend #(.SYSTEM_SERVICE(TRAP_SERVICE), .MEMORY_SERVICE(MEMORY_SERVICE)) backend (
+    .memory_issue_allowed_i(memory_issue_allowed_i && running), .admit_valid_i, .admit_id_i,
+    .admission_valid_o, .admission_id_o, .admission_address_o, .admission_data_o, .admission_mask_o, .admission_size_o,
+    .memory_prepare_o, .memory_busy_o, .memory_committed_o, .memory_irrevocable_o, .memory_fatal_o,
+    .data_request_valid_o, .data_request_ready_i, .data_request_o,
+    .data_response_valid_i, .data_response_ready_o, .data_response_i,
     .cancel_system_i(flush_i || !running), .system_prepare_o, .system_busy_o,
     .system_redirect_o(system_redirect), .system_redirect_pc_o(system_pc),
     .system_trap_valid_o(trap_valid_o), .system_trap_event_o(trap_event_o),
@@ -82,6 +105,8 @@ module fetch_execution_core #(parameter bit FRONTEND_FAULTS = 1, parameter bit T
 `ifndef SYNTHESIS
   always_ff @(posedge clk_i) begin
     if (!rst_i) begin
+      assert (!flush_i || flush_ready_o) else $fatal(1, "FETCH_CORE_MMIO_FLUSH");
+      assert (!drained_i || !memory_busy_o) else $fatal(1, "FETCH_CORE_MEMORY_DRAIN");
       assert (trap_accept_o == (trap_valid_o && trap_ready_i))
         else $fatal(1, "FETCH_CORE_TRAP_ATOMIC");
       assert (!trap_accept_o || (redirect_o && !branch_redirect && retire_accept_o == 0))

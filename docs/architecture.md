@@ -3,7 +3,7 @@
 The diagrams describe the current working-tree implementation. They show
 functional RTL hierarchy and major interfaces, not clock-cycle stage boundaries
 or a post-synthesis netlist. The connected-core view uses
-`FRONTEND_FAULTS=1` and `TRAP_SERVICE=1`, matching the
+`FRONTEND_FAULTS=1`, `TRAP_SERVICE=1`, and `MEMORY_SERVICE=0`, matching the
 [`system_core` profile](../config/system_core.json).
 
 ## Connected core
@@ -12,8 +12,9 @@ or a post-synthesis netlist. The connected-core view uses
 
 The outer boundary is [`fetch_execution_core`](../rtl/core/fetch_execution_core.sv).
 It has an instruction-memory channel, accepted retirement/trap traces, and
-external readiness/recovery controls. It has **no data-memory port** yet.
-Loads, stores, `FENCE`, and `FENCE.I` are reported on `unsupported_o`. When
+external readiness/recovery controls. The additional data-memory and admission
+ports are inactive in this diagram's memory-disabled profile. Here loads, stores,
+`FENCE`, and `FENCE.I` are reported on `unsupported_o`. When
 included in the admitted prefix, they block allocation of that whole prefix:
 an ALU in lane 0 paired with an unsupported load in lane 1 is held too. This
 is not a temporary readiness stall. A reset or redirect must discard the
@@ -68,12 +69,27 @@ configuration remain authoritative for exact interfaces.
 
 ![Head memory controller](diagrams/head-memory-controller.svg)
 
-[`head_memory_controller`](../rtl/core/head_memory_controller.sv) is a separate
-implemented controller, currently exercised by its
-[unit test](../verif/unit/head_memory_controller_tb.cpp). It is **not instantiated
-by the fetched core**. Its caller, acceptance signals and admission guarantee
-are supplied by the testbench today; the figure does not claim a production
-ROB/CSR or store-admission connection.
+[`head_memory_controller`](../rtl/core/head_memory_controller.sv) is instantiated
+inside the production backend with `MEMORY_SERVICE=1` and `TRAP_SERVICE=1`.
+The [`memory_core` profile](../config/memory_core.json) exercises fetched loads
+and stores through the shared head dispatcher, both PRF operands, real ROB
+retirement and shared CSR trap handling. The external admission producer remains
+outside this core. The [standalone test](../verif/unit/head_memory_controller_tb.cpp)
+continues checking the controller boundary separately.
+
+Loads/stores allocate alone, bypass IQ and block younger allocation. The matching
+ROB head reserves PRF reads until both operands are ready, then captures once.
+Successful loads write their destination at solo retirement. Memory retirement
+increments the shared `minstret` counter. Raw fault completion retains memory
+ownership; actual trap acceptance applies CSR effects and releases it. A younger
+memory descriptor cannot block an older nonmemory fault.
+
+`flush_ready_o` is low during irrevocable MMIO ownership. The caller must defer
+external flush and keep retirement/trap acceptance available. Offered cached
+reads and committed stores drain after legal cancellation. Either port's fatal
+error freezes architectural progress until reset; instruction-port fatal does
+not cancel granted memory traffic. Reset must also clear the external targets.
+See the profile contract for admission, issue permission, drain and reset rules.
 
 The preparation stage captures instruction, PC, operands, address and attributes
 once at the matching ROB head. It retains that descriptor until accepted

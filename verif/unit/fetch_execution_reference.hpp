@@ -40,7 +40,7 @@ struct Bench {
     std::array<uint32_t,32> regs{};
     std::array<bool,32> known{};
     std::map<std::string,unsigned> coverage;
-    bool fault_support=false, trap_service=false, system_service=false, system_prepared=false;
+    bool memory_service=false, fault_support=false, trap_service=false, system_service=false, system_prepared=false;
     CsrModel csr_state;
     Reply system_reply;
     Expected system_expected;
@@ -49,7 +49,7 @@ struct Bench {
     unsigned cycles=0, retired=0, requests=0, expected_id=0, pending_id=0, delay=0;
     uint32_t pc=0, pending_address=0, error_address=UINT32_MAX;
     uint64_t order=0;
-    bool pending=false, held=false, fatal=false;
+    bool pending=false, held=false, fatal=false, data_fatal=false;
     std::array<uint32_t,(REQUEST_BITS+31)/32> held_request{};
     void require(bool good,const std::string& why) const {
         if (!good) throw std::runtime_error("fetch execution core mismatch cycle="+std::to_string(cycles)+": "+why);
@@ -87,7 +87,7 @@ struct Bench {
         }
         return e;
     }
-    Expected expected() {
+    virtual Expected expected() {
         if (fault_support && (pc%4 || pc>=65536 || (pc&~31U)==error_address || decoded_fault(memory[pc/4]))) {
             const bool fetch=pc%4 || pc>=65536 || (pc&~31U)==error_address;
             const uint32_t insn=fetch ? 0 : memory[pc/4];
@@ -172,7 +172,14 @@ struct Bench {
         }
         return e;
     }
+    virtual void drive_memory(const Input&) {}
+    virtual void observe_memory(const Input&) {}
+    virtual void memory_retired(const Expected&) {}
+    virtual void memory_trapped() {}
     void tick(Input i={}) {
+        d.memory_issue_allowed_i=0; d.admit_valid_i=0; d.admit_id_i=0;
+        d.data_request_ready_i=0; d.data_response_valid_i=0;
+        for (unsigned n=0;n<(RESPONSE_BITS+31)/32;n++) d.data_response_i[n]=0;
         d.trap_ready_i=i.trap_ready;
         d.clk_i=0; d.rst_i=i.reset; d.enable_i=i.enable; d.flush_i=i.flush; d.flush_pc_i=i.target;
         d.drained_i=i.drain; d.resolve_grant_i=i.grant; d.execution_ready_i=i.execute;
@@ -185,21 +192,25 @@ struct Bench {
         put(d.response_i,RESPONSE_STATUS_OFFSET,2,status);
         if (status==0 && pending) for (unsigned n=0; n<8; ++n)
             put(d.response_i,RESPONSE_LINE_READ_DATA_OFFSET+32*n,32,memory[pending_address/4+n]);
+        drive_memory(i);
         d.eval();
+        observe_memory(i);
         Reply accepted_csr; bool csr_accept=false;
         unsigned ordinary=0;
         if (i.reset) {
             require(!d.request_valid_o && !d.response_ready_o && !d.dispatch_o && !d.retire_accept_o && !d.redirect_o,"reset outputs");
-            pending=held=fatal=false; pc=0; order=0; expected_id=0; known.fill(false); known[0]=true; regs[0]=0;
+            pending=held=fatal=data_fatal=false; pc=0; order=0; expected_id=0; known.fill(false); known[0]=true; regs[0]=0;
             trap_csrs={0x1800,0,0,0}; csr_state.reset_state(); system_prepared=false;
             coverage["reset"]++;
         } else {
-            require(bool(d.fatal_o)==fatal,"fatal state");
-            if (system_service && (i.flush || fatal))
+            const bool halted=fatal || data_fatal;
+            require(bool(d.fatal_o)==halted,"fatal state");
+            if (halted) require(!d.dispatch_o && !d.retire_accept_o && !d.trap_accept_o && !d.redirect_o,"fatal architectural freeze");
+            if (system_service && (i.flush || halted))
                 require(!d.system_prepare_o && !d.system_busy_o,"canceled system response still visible");
-            if (i.flush || fatal) system_prepared=false;
+            if (i.flush || halted) system_prepared=false;
             if (system_service && d.system_prepare_o) {
-                require(!system_prepared && !i.flush && !fatal && pc<65536 && system_instruction(memory[pc/4]),"head-only system preparation");
+                require(!system_prepared && !i.flush && !halted && pc<65536 && system_instruction(memory[pc/4]),"head-only system preparation");
                 require(!d.retire_accept_o,"preparation overlaps older retirement");
                 system_expected=expected_system(); system_prepared=true;
                 coverage["system_prepare"]++;
@@ -245,7 +256,8 @@ struct Bench {
                 if (system_service && memory[address/4]==0x10500073)
                     coverage[lane ? "wfi_seen_lane1":"wfi_seen_lane0"]++;
                 bool unsupported=operation(memory[address/4])<0 && !(fault_support && decoded_fault(memory[address/4]))
-                    && !(system_service && system_instruction(memory[address/4]));
+                    && !(system_service && system_instruction(memory[address/4]))
+                    && !(memory_service && !illegal(memory[address/4]) && ((memory[address/4]&127)==3 || (memory[address/4]&127)==0x23));
                 if (fault_support && illegal(memory[address/4]) && (d.dispatch_o&(1U<<lane)))
                     coverage[lane ? "illegal_lane1" : "illegal_lane0"]++;
                 if (fault_support && (d.dispatch_o&(1U<<lane))) {
@@ -289,19 +301,20 @@ struct Bench {
             for (unsigned lane=0;lane<2;++lane) if (d.retire_accept_o&(1U<<lane)) {
                 Expected e=expected(); require(!e.fault,"fault retired normally");
                 compare(d.retire_event_o,lane*EVENT_BITS,e.event);
-                if (system_service && e.op>=29) {
+                if (system_service && e.op>=29 && e.op<=31) {
                     require(d.retire_accept_o==1 && system_prepared,"serial acceptance");
                     if (e.op==30) require(d.redirect_o && d.redirect_pc_o==e.next_pc,"missing MRET redirect");
                     accepted_csr=system_reply; csr_accept=true; system_prepared=false;
                     coverage[e.op==30 ? "mret_retired":e.op==31 ? "wfi_retired":"csr_retired"]++;
                 } else ordinary++;
+                memory_retired(e);
                 if (e.rd) { regs[e.rd]=e.result; known[e.rd]=true; }
                 ++order; ++retired; pc=e.next_pc;
                 coverage["op_"+std::to_string(e.op)]++;
                 if (e.op>=21 && e.op<=28) coverage[e.taken ? "taken" : "not_taken"]++;
             }
             if (d.retire_accept_o==3) coverage["dual_retire"]++;
-            if (d.backend_fault_o && !fatal) {
+            if (d.backend_fault_o && !halted) {
                 auto e=expected(); require(e.fault,"unexpected head fault"); compare(d.backend_fault_event_o,0,e.event);
                 coverage["backend_fault"]++;
             }
@@ -319,6 +332,7 @@ struct Bench {
                         accepted_csr=csr_state.propose(command); csr_accept=true; system_prepared=false;
                     }
                     for (unsigned n=0;n<4;n++) trap_csrs[n]=get32(e,n*CSR_EFFECT_BITS+CSR_NEW_VALUE_OFFSET,32);
+                    memory_trapped();
                     ++order; ++traps; pc=target; coverage["trap_accept"]++;
                 } else coverage["trap_stall"]++;
             } else for (unsigned n=0;n<EVENT_BITS;n++) require(!bit(d.trap_event_o,n),"invalid trap payload");
