@@ -54,9 +54,11 @@ struct Bench {
     void require(bool good,const std::string& why) const {
         if (!good) throw std::runtime_error("fetch execution core mismatch cycle="+std::to_string(cycles)+": "+why);
     }
-    static bool system_instruction(uint32_t insn) {
+    static bool fence(uint32_t insn) { return (insn&0x707f)==0x0f; }
+    bool system_instruction(uint32_t insn) const {
         const unsigned kind=(insn>>12)&7;
-        return insn==0x30200073 || insn==0x10500073 || ((insn&127)==0x73 && kind!=0 && kind!=4);
+        return insn==0x30200073 || insn==0x10500073 || ((insn&127)==0x73 && kind!=0 && kind!=4)
+            || (memory_service && fence(insn));
     }
     static bool decoded_fault(uint32_t insn) {
         return illegal(insn) || insn==0x00000073 || insn==0x00100073;
@@ -68,11 +70,11 @@ struct Bench {
     Expected expected_system() {
         const uint32_t insn=memory[pc/4];
         const bool mret=insn==0x30200073;
-        const unsigned source=mret || (insn&(1u<<14)) ? 0 : (insn>>15)&31;
+        const unsigned source=mret || fence(insn) || (insn&(1u<<14)) ? 0 : (insn>>15)&31;
         require(known[source],"system source initialized");
         Command command; command.instruction=insn; command.source=regs[source]; command.pc=pc;
         system_reply=csr_state.propose(command);
-        Expected e{}; e.op=mret ? 30:insn==0x10500073 ? 31:29; e.rd=mret ? 0:(insn>>7)&31;
+        Expected e{}; e.op=mret ? 30:insn==0x10500073 ? 31:fence(insn) ? 34:29; e.rd=mret || fence(insn) ? 0:(insn>>7)&31;
         e.result=system_reply.value; e.next_pc=system_reply.legal ? system_reply.next:pc; e.fault=!system_reply.legal;
         put(e.event,VALID_OFFSET,1,1); put(e.event,ORDER_OFFSET,64,order);
         put(e.event,INSTRUCTION_OFFSET,32,insn); put(e.event,PRIVILEGE_OFFSET,2,3);
@@ -221,7 +223,7 @@ struct Bench {
             }
             if (system_service && system_prepared && !i.flush) {
                 require(!d.dispatch_o,"younger dispatch past system barrier");
-                if (system_expected.op==31) require(!d.redirect_o,"WFI redirected");
+                if (system_expected.op==31 || system_expected.op==34) require(!d.redirect_o,"WFI or FENCE redirected");
             }
             if (d.redirect_o) {
                 const bool mret=system_service && system_prepared && system_expected.op==30 && d.retire_accept_o==1;
@@ -301,11 +303,11 @@ struct Bench {
             for (unsigned lane=0;lane<2;++lane) if (d.retire_accept_o&(1U<<lane)) {
                 Expected e=expected(); require(!e.fault,"fault retired normally");
                 compare(d.retire_event_o,lane*EVENT_BITS,e.event);
-                if (system_service && e.op>=29 && e.op<=31) {
+                if (system_service && ((e.op>=29 && e.op<=31) || e.op==34)) {
                     require(d.retire_accept_o==1 && system_prepared,"serial acceptance");
                     if (e.op==30) require(d.redirect_o && d.redirect_pc_o==e.next_pc,"missing MRET redirect");
                     accepted_csr=system_reply; csr_accept=true; system_prepared=false;
-                    coverage[e.op==30 ? "mret_retired":e.op==31 ? "wfi_retired":"csr_retired"]++;
+                    coverage[e.op==30 ? "mret_retired":e.op==31 ? "wfi_retired":e.op==34 ? "fence_retired":"csr_retired"]++;
                 } else ordinary++;
                 memory_retired(e);
                 if (e.rd) { regs[e.rd]=e.result; known[e.rd]=true; }

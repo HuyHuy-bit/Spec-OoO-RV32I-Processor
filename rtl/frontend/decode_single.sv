@@ -57,7 +57,8 @@ module decode_single (
           if (funct3 <= 2) decoded_o.op = OP_STORE;
         end
       end
-      7'h0f: if (funct3 inside {3'd0, 3'd1}) decoded_o.op = OP_FENCE;
+      7'h0f: if (funct3 == 0) decoded_o.op = OP_FENCE;
+        else if (funct3 == 1) decoded_o.op = OP_FENCE_I;
       7'h73: begin
         if (funct3 inside {3'd1, 3'd2, 3'd3, 3'd5, 3'd6, 3'd7}) begin
           decoded_o.op = OP_CSR;

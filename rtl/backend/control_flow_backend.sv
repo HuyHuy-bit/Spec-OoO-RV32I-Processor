@@ -98,7 +98,8 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0, parameter bit ME
     assign executable_instruction[lane*32 +: 32] = frontend_fault_i[lane] ? 32'h00000013 : instruction_i[lane*32 +: 32];
     assign payload[lane*64 +: 64] = {frontend_fault_i[lane] ? 32'd0 : pc_i[lane*32 +: 32], executable_instruction[lane*32 +: 32]};
     decode_single decode (.instruction_i(executable_instruction[lane*32 +: 32]), .decoded_o(decoded[lane]));
-    assign system_op[lane] = SYSTEM_SERVICE && !frontend_fault_i[lane] && decoded[lane].op inside {OP_CSR, OP_MRET, OP_WFI};
+    assign system_op[lane] = SYSTEM_SERVICE && !frontend_fault_i[lane] && (decoded[lane].op inside {OP_CSR, OP_MRET, OP_WFI}
+      || (MEMORY_SERVICE && decoded[lane].op == OP_FENCE));
     assign memory_op[lane] = MEMORY_SERVICE && !frontend_fault_i[lane] && decoded[lane].op inside {OP_LOAD, OP_STORE};
     assign cfi[lane] = decoded[lane].op inside {OP_BRANCH, OP_JAL, OP_JALR};
     assign supported_o[lane] = frontend_fault_i[lane] || ((cfi[lane] || serial_op[lane] || decoded[lane].op inside {OP_ALU, OP_LUI, OP_AUIPC})
@@ -193,7 +194,7 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0, parameter bit ME
       .clk_i, .rst_i, .cancel_i(flush_i || cancel_system_i), .retire_accept_i(retire_accept_o),
       .head_valid_i(head_valid), .head_id_i(head_id_o), .head_pc_i(head_pc),
       .system_valid_i(owner_valid && !owner_memory), .system_id_i(system_id), .instruction_i(system_instruction),
-      .source_ready_i(read_ready[0]), .source_i(read_data[31:0]),
+      .source_ready_i(read_ready[0]), .source_i(read_data[31:0]), .order_ready_i(!memory_busy_o),
       .prepare_o(system_prepare_o), .busy_o(system_busy_o),
       .fault_valid_i(fault_pending_o), .fault_event_i(fault_event_o),
       .serial_offer_o(system_offer), .serial_id_o(system_serial_id), .serial_event_o(system_serial_event), .serial_accept_i(serial_accept && system_offer),

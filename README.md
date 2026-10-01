@@ -130,7 +130,8 @@ Interrupts are disabled. This target is not a claim of full ISA acceptance.
 | WFI | Serialized immediate-resume hint |
 | ECALL, EBREAK, illegal instructions and fetch faults | Precise trap path |
 | Loads and stores | Head-only execution with `MEMORY_SERVICE=1`; block dispatch when disabled |
-| FENCE and FENCE.I | Unsupported in the fetched core and block dispatch |
+| FENCE | Serialized full ordering with `MEMORY_SERVICE=1`; waits for older data completion, including store write responses; blocks dispatch when disabled |
+| FENCE.I | Unsupported in the fetched core and blocks dispatch |
 
 An unsupported operation in the admitted prefix blocks allocation of that whole
 prefix, including an older ALU instruction paired with it. This is not a
@@ -195,7 +196,7 @@ make head-memory-check
 | --- | --- |
 | `make check-fast` | Foundation, schema, model and reference checks; not the complete two-wide core regression |
 | `make system-core-check` | Connected fetch/integer/control/system core, including traps and redirects |
-| `make memory-core-check` | Fetched load/store programs, real retirement/traps, admission, cancellation and data-port ownership |
+| `make memory-core-check` | Fetched loads/stores and ordinary FENCE ordering, real retirement/traps, admission, cancellation and data-port ownership |
 | `make head-memory-check` | Standalone memory controller with synthetic head/acceptance inputs and real transaction engines |
 
 The [Makefile](Makefile) and [unit profiles](tools/unit_profiles.py) define the
@@ -205,7 +206,7 @@ individual gates. Generated outputs and full evidence archives stay local.
 
 - Implement the producer behind the cached-store admission interface.
 - Add the remaining memory ordering, load/store queue, forwarding, cache,
-  fence, and dynamic prediction functionality.
+  FENCE.I, and dynamic prediction functionality.
 - Complete the selected ISA and integrated-core verification gates.
 - Measure full-core timing and review the clock target before hardening.
 - Run the LibreLane RTL-to-GDSII flow and report measured implementation results.

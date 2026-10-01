@@ -5,7 +5,7 @@ module head_system_controller (
   input wire head_valid_i,
   input wire [12:0] head_id_i,
   input wire [31:0] head_pc_i,
-  input wire system_valid_i, source_ready_i,
+  input wire system_valid_i, source_ready_i, order_ready_i,
   input wire [12:0] system_id_i,
   input wire [31:0] instruction_i, source_i,
   output wire prepare_o, busy_o,
@@ -35,7 +35,8 @@ module head_system_controller (
   wire [31:0] value, next_pc;
   wire [64:0] unused_state;
   commit_csr_effect_t [3:0] effects;
-  wire system_request = system_valid_i && source_ready_i && head_valid_i && system_id_i == head_id_i;
+  wire system_request = system_valid_i && source_ready_i && head_valid_i && system_id_i == head_id_i
+      && (decoded.op != OP_FENCE || order_ready_i);
   wire request = fault_valid_i || system_request;
   wire prepare = request && request_ready;
   wire owner_live = head_valid_i && head_id_i == id_q && head_pc_i == saved_q.pc_before;
@@ -118,7 +119,8 @@ module head_system_controller (
 `ifndef SYNTHESIS
   always_ff @(posedge clk_i) begin
     if (!rst_i && !cancel_i) begin
-      assert (!prepare_o || decoded.op inside {OP_CSR, OP_MRET, OP_WFI}) else $fatal(1, "HEAD_SYSTEM_OPERATION");
+      assert (!prepare_o || decoded.op inside {OP_CSR, OP_MRET, OP_WFI} || decoded.op == OP_FENCE)
+        else $fatal(1, "HEAD_SYSTEM_OPERATION");
       assert (!fault_valid_i || (head_valid_i && fault_event_i.valid && fault_event_i.trap
               && !fault_event_i.retired && fault_event_i.pc_before == head_pc_i))
         else $fatal(1, "HEAD_SYSTEM_FAULT");

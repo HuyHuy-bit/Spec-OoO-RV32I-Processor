@@ -115,7 +115,7 @@ int main(int argc,char** argv) {
         }
         b.coverage["address_sweep"]++;
     }
-    for (uint32_t word:{0u,0xffffffffu,0x13u,0x00000073u,0x00100073u,0x105000f3u,0x10508073u,0x10200073u,0x30004073u}) {
+    for (uint32_t word:{0u,0xffffffffu,0x13u,0x00000073u,0x00100073u,0x105000f3u,0x10508073u,0x10200073u,0x30004073u,0x0000100fu,0x0000200fu}) {
         Input in; in.instruction=word; b.command(in,2); b.coverage["unsupported_instruction"]++;
     }
     for (unsigned inhibit:{0u,4u}) for (uint32_t pc:{0u,0x100u,0xfffffffcu}) {
@@ -124,6 +124,10 @@ int main(int argc,char** argv) {
         b.command(in,7); b.audit();
         b.command(in,4,true); b.audit(); b.coverage["cancel_wfi"]++;
         b.command(in,3,false,true); b.audit(); b.coverage["reset_wfi"]++;
+    }
+    for (uint32_t word:{0x0000000fu,0x0ff0000fu,0x8330000fu,0x0100000fu,0xffff808fu}) {
+        Input in; in.instruction=word; in.pc=0x200; in.source=0xffffffff;
+        b.command(in,5); b.audit(); b.coverage["fence"]++;
     }
     { Input in; in.instruction=0x10500073; in.trap=true; in.pc=0x804; in.cause=11;
       b.command(in,3); b.audit(); b.coverage["trap_over_wfi"]++; }

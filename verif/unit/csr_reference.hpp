@@ -45,7 +45,7 @@ struct CsrModel {
             out.effects[0]=effect(0x300,(state.at(0x300)&~0x88u)|0x80u|((state.at(0x300)>>4)&8u),0x88,3);
             return out;
         }
-        if (in.instruction == 0x10500073) {
+        if (in.instruction == 0x10500073 || (in.instruction&0x707f) == 0x0f) {
             out.legal=true; out.next=in.pc+4;
             return out;
         }

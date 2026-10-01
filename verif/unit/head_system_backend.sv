@@ -66,7 +66,7 @@ module head_system_backend (
     .clk_i, .rst_i, .cancel_i(flush_i), .retire_accept_i(retire_accept_o),
     .head_valid_i(head_valid_o), .head_id_i(head_id_o), .head_pc_i(head_pc_o),
     .system_valid_i, .system_id_i, .instruction_i(system_instruction_i),
-    .source_ready_i(read_ready_o[0]), .source_i(read_data_o[31:0]),
+    .source_ready_i(read_ready_o[0]), .source_i(read_data_o[31:0]), .order_ready_i(1'b1),
     .prepare_o(system_prepare_o), .busy_o(system_busy_o),
     .fault_valid_i(raw_trap_valid), .fault_event_i(raw_trap_event),
     .serial_offer_o, .serial_id_o(serial_id), .serial_event_o, .serial_accept_i(serial_accept_o),

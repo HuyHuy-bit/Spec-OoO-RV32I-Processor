@@ -3,7 +3,7 @@ package single_lane_pkg;
   import platform_pkg::*;
   typedef enum logic [4:0] {
     OP_ILLEGAL, OP_ALU, OP_LUI, OP_AUIPC, OP_JAL, OP_JALR, OP_BRANCH,
-    OP_LOAD, OP_STORE, OP_CSR, OP_ECALL, OP_EBREAK, OP_MRET, OP_FENCE, OP_WFI
+    OP_LOAD, OP_STORE, OP_CSR, OP_ECALL, OP_EBREAK, OP_MRET, OP_FENCE, OP_WFI, OP_FENCE_I
   } operation_e;
   typedef struct packed {
     operation_e op;
