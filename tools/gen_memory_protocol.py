@@ -68,7 +68,7 @@ def validate(config: dict) -> None:
 
     expected_completion = {
         "data_order": "A write response handshake confirms the write reached the target data-order point.",
-        "instruction_visibility": "After prior data writes respond and both ports drain, a later instruction read observes those writes.",
+        "instruction_visibility": "An instruction read request accepted after a data write response handshake observes that write.",
     }
     if config["completion_points"] != expected_completion:
         raise ValueError("memory completion points do not match protocol v0")

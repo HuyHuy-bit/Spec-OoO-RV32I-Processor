@@ -45,7 +45,7 @@
   },
   "completion_points": {
     "data_order": "A write response handshake confirms the write reached the target data-order point.",
-    "instruction_visibility": "After prior data writes respond and both ports drain, a later instruction read observes those writes."
+    "instruction_visibility": "An instruction read request accepted after a data write response handshake observes that write."
   },
   "request_hold_rule": "Once request valid is asserted, valid and payload remain stable through the request handshake.",
   "response_hold_rule": "Once response valid is asserted, valid and payload remain stable through the response handshake.",

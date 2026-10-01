@@ -51,14 +51,18 @@ struct Bench {
     uint64_t order=0;
     bool pending=false, held=false, fatal=false, data_fatal=false;
     std::array<uint32_t,(REQUEST_BITS+31)/32> held_request{};
+    // Instruction target data is captured at request acceptance; fetched words must match the last response.
+    std::array<uint32_t,8> pending_line{}, line{};
+    uint32_t line_address=UINT32_MAX;
     void require(bool good,const std::string& why) const {
         if (!good) throw std::runtime_error("fetch execution core mismatch cycle="+std::to_string(cycles)+": "+why);
     }
     static bool fence(uint32_t insn) { return (insn&0x707f)==0x0f; }
+    static bool fence_i(uint32_t insn) { return (insn&0x707f)==0x100f; }
     bool system_instruction(uint32_t insn) const {
         const unsigned kind=(insn>>12)&7;
         return insn==0x30200073 || insn==0x10500073 || ((insn&127)==0x73 && kind!=0 && kind!=4)
-            || (memory_service && fence(insn));
+            || (memory_service && (fence(insn) || fence_i(insn)));
     }
     static bool decoded_fault(uint32_t insn) {
         return illegal(insn) || insn==0x00000073 || insn==0x00100073;
@@ -70,11 +74,12 @@ struct Bench {
     Expected expected_system() {
         const uint32_t insn=memory[pc/4];
         const bool mret=insn==0x30200073;
-        const unsigned source=mret || fence(insn) || (insn&(1u<<14)) ? 0 : (insn>>15)&31;
+        const bool barrier=fence(insn) || fence_i(insn);
+        const unsigned source=mret || barrier || (insn&(1u<<14)) ? 0 : (insn>>15)&31;
         require(known[source],"system source initialized");
         Command command; command.instruction=insn; command.source=regs[source]; command.pc=pc;
         system_reply=csr_state.propose(command);
-        Expected e{}; e.op=mret ? 30:insn==0x10500073 ? 31:fence(insn) ? 34:29; e.rd=mret || fence(insn) ? 0:(insn>>7)&31;
+        Expected e{}; e.op=mret ? 30:insn==0x10500073 ? 31:fence(insn) ? 34:fence_i(insn) ? 35:29; e.rd=mret || barrier ? 0:(insn>>7)&31;
         e.result=system_reply.value; e.next_pc=system_reply.legal ? system_reply.next:pc; e.fault=!system_reply.legal;
         put(e.event,VALID_OFFSET,1,1); put(e.event,ORDER_OFFSET,64,order);
         put(e.event,INSTRUCTION_OFFSET,32,insn); put(e.event,PRIVILEGE_OFFSET,2,3);
@@ -174,6 +179,7 @@ struct Bench {
         }
         return e;
     }
+    virtual uint32_t fetch_word(uint32_t address) const { return memory[address/4]; }
     virtual void drive_memory(const Input&) {}
     virtual void observe_memory(const Input&) {}
     virtual void memory_retired(const Expected&) {}
@@ -193,7 +199,7 @@ struct Bench {
         const unsigned status=i.inject_bad ? 2 : pending_address==error_address ? 1 : 0;
         put(d.response_i,RESPONSE_STATUS_OFFSET,2,status);
         if (status==0 && pending) for (unsigned n=0; n<8; ++n)
-            put(d.response_i,RESPONSE_LINE_READ_DATA_OFFSET+32*n,32,memory[pending_address/4+n]);
+            put(d.response_i,RESPONSE_LINE_READ_DATA_OFFSET+32*n,32,pending_line[n]);
         drive_memory(i);
         d.eval();
         observe_memory(i);
@@ -201,7 +207,7 @@ struct Bench {
         unsigned ordinary=0;
         if (i.reset) {
             require(!d.request_valid_o && !d.response_ready_o && !d.dispatch_o && !d.retire_accept_o && !d.redirect_o,"reset outputs");
-            pending=held=fatal=data_fatal=false; pc=0; order=0; expected_id=0; known.fill(false); known[0]=true; regs[0]=0;
+            pending=held=fatal=data_fatal=false; line_address=UINT32_MAX; pc=0; order=0; expected_id=0; known.fill(false); known[0]=true; regs[0]=0;
             trap_csrs={0x1800,0,0,0}; csr_state.reset_state(); system_prepared=false;
             coverage["reset"]++;
         } else {
@@ -221,17 +227,20 @@ struct Bench {
                 require(!d.dispatch_o && !d.retire_accept_o,"flush atomicity");
                 if (!fatal) { pc=i.target; coverage["external_flush"]++; }
             }
+            const bool serial_redirect=system_service && system_prepared && (system_expected.op==30 || system_expected.op==35);
             if (system_service && system_prepared && !i.flush) {
                 require(!d.dispatch_o,"younger dispatch past system barrier");
                 if (system_expected.op==31 || system_expected.op==34) require(!d.redirect_o,"WFI or FENCE redirected");
             }
             if (d.redirect_o) {
-                const bool mret=system_service && system_prepared && system_expected.op==30 && d.retire_accept_o==1;
-                if (system_service && system_prepared && system_expected.op==30 && !i.flush)
-                    require(mret,"MRET redirect before retirement");
+                const bool mret=serial_redirect && d.retire_accept_o==1;
+                if (serial_redirect && !i.flush) require(mret,"MRET or FENCE.I redirect before retirement");
                 require(!d.dispatch_o && (!d.retire_accept_o || mret),"redirect atomicity");
                 require(i.flush || d.trap_accept_o || mret || i.grant,"redirect without grant");
-                if (mret) { require(d.redirect_pc_o==system_expected.next_pc,"MRET target"); coverage["mret_redirect"]++; }
+                if (mret) {
+                    require(d.redirect_pc_o==system_expected.next_pc,"MRET or FENCE.I target");
+                    coverage[system_expected.op==30 ? "mret_redirect":"fence_i_redirect"]++;
+                }
                 else if (!i.flush && !d.trap_accept_o) coverage["branch_redirect"]++;
                 if (pending) coverage["redirect_pending"]++;
                 if (held) coverage["redirect_request_stall"]++;
@@ -254,17 +263,19 @@ struct Bench {
             } else for (unsigned lane=0; lane<2; ++lane) if (d.fetch_valid_o & (1U<<lane)) {
                 uint32_t address=uint32_t(d.fetch_pc_o>>(32*lane));
                 require(address<65536 && address%4==0,"fetched executable PC");
-                require(uint32_t(d.fetch_instruction_o>>(32*lane))==memory[address/4],"fetched word");
-                if (system_service && memory[address/4]==0x10500073)
+                const uint32_t word=uint32_t(d.fetch_instruction_o>>(32*lane));
+                require((address&~31U)==line_address && word==line[address%32/4],"fetched word");
+                if (word!=memory[address/4]) coverage["stale_fetch_visible"]++;
+                if (system_service && word==0x10500073)
                     coverage[lane ? "wfi_seen_lane1":"wfi_seen_lane0"]++;
-                bool unsupported=operation(memory[address/4])<0 && !(fault_support && decoded_fault(memory[address/4]))
-                    && !(system_service && system_instruction(memory[address/4]))
-                    && !(memory_service && !illegal(memory[address/4]) && ((memory[address/4]&127)==3 || (memory[address/4]&127)==0x23));
-                if (fault_support && illegal(memory[address/4]) && (d.dispatch_o&(1U<<lane)))
+                bool unsupported=operation(word)<0 && !(fault_support && decoded_fault(word))
+                    && !(system_service && system_instruction(word))
+                    && !(memory_service && !illegal(word) && ((word&127)==3 || (word&127)==0x23));
+                if (fault_support && illegal(word) && (d.dispatch_o&(1U<<lane)))
                     coverage[lane ? "illegal_lane1" : "illegal_lane0"]++;
                 if (fault_support && (d.dispatch_o&(1U<<lane))) {
-                    if (memory[address/4]==0x73) coverage[lane ? "ecall_lane1":"ecall_lane0"]++;
-                    if (memory[address/4]==0x100073) coverage[lane ? "ebreak_lane1":"ebreak_lane0"]++;
+                    if (word==0x73) coverage[lane ? "ecall_lane1":"ecall_lane0"]++;
+                    if (word==0x100073) coverage[lane ? "ebreak_lane1":"ebreak_lane0"]++;
                 }
                 require(bool(d.unsupported_o&(1U<<lane))==unsupported,"unsupported lane indication");
                 if (unsupported) coverage["unsupported"]++;
@@ -286,12 +297,17 @@ struct Bench {
                             require(bit(d.request_o,n)==0,"read request reserved fields");
                     if (i.request_ready) {
                         pending=true; held=false; pending_id=id; pending_address=address; delay=i.latency; ++requests;
+                        for (unsigned n=0;n<8;++n) pending_line[n]=fetch_word(address+4*n);
                     } else {
                         held=true; coverage["request_stall"]++;
                         for (unsigned n=0;n<held_request.size();++n) held_request[n]=d.request_o[n];
                     }
                 } else if (pending && delay) --delay;
-                if (response && d.response_ready_o) { pending=false; expected_id=(expected_id+1)%16; }
+                if (response && d.response_ready_o) {
+                    pending=false; expected_id=(expected_id+1)%16;
+                    line_address=pending_address; line=pending_line;
+                    for (unsigned n=0;n<8;++n) if (line[n]!=memory[line_address/4+n]) { coverage["stale_response"]++; break; }
+                }
                 if (i.inject_bad) { fatal=true; coverage["fatal_injected"]++; }
             }
             require(d.retire_accept_o!=2,"retirement prefix");
@@ -303,11 +319,11 @@ struct Bench {
             for (unsigned lane=0;lane<2;++lane) if (d.retire_accept_o&(1U<<lane)) {
                 Expected e=expected(); require(!e.fault,"fault retired normally");
                 compare(d.retire_event_o,lane*EVENT_BITS,e.event);
-                if (system_service && ((e.op>=29 && e.op<=31) || e.op==34)) {
+                if (system_service && ((e.op>=29 && e.op<=31) || e.op==34 || e.op==35)) {
                     require(d.retire_accept_o==1 && system_prepared,"serial acceptance");
-                    if (e.op==30) require(d.redirect_o && d.redirect_pc_o==e.next_pc,"missing MRET redirect");
+                    if (e.op==30 || e.op==35) require(d.redirect_o && d.redirect_pc_o==e.next_pc,"missing MRET or FENCE.I redirect");
                     accepted_csr=system_reply; csr_accept=true; system_prepared=false;
-                    coverage[e.op==30 ? "mret_retired":e.op==31 ? "wfi_retired":e.op==34 ? "fence_retired":"csr_retired"]++;
+                    coverage[e.op==30 ? "mret_retired":e.op==31 ? "wfi_retired":e.op==34 ? "fence_retired":e.op==35 ? "fence_i_retired":"csr_retired"]++;
                 } else ordinary++;
                 memory_retired(e);
                 if (e.rd) { regs[e.rd]=e.result; known[e.rd]=true; }

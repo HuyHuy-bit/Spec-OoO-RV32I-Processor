@@ -153,8 +153,8 @@ void directed(Check& check) {
     in={}; in.valid=3; in.accept=3; check.step(in);
     in={}; in.drain=true; in.valid=3; check.step(in);
     in={}; in.recover=true; in.head=true; in.valid=3; check.step(in);
-    for (unsigned kind : {1u,2u,3u,5u,6u,7u,0u,8u,9u}) for (unsigned source=0;source<64;source++) {
-        const uint32_t instruction=kind==9 ? 0x0ff0000fu|(source%32)<<15|(source%32)<<7:kind==8 ? 0x10500073:kind ? csr(kind,source%32):0x30200073;
+    for (unsigned kind : {1u,2u,3u,5u,6u,7u,0u,8u,9u,10u}) for (unsigned source=0;source<64;source++) {
+        const uint32_t instruction=kind>=9 ? (kind==9 ? 0x0ff0000fu:0xfff0100fu)|(source%32)<<15|(source%32)<<7:kind==8 ? 0x10500073:kind ? csr(kind,source%32):0x30200073;
         const unsigned tag=kind && kind<4 && source%32 ? source:0;
         check.step(capture((source*37+kind*257)%8192,tag,instruction));
         in=matching(check); check.step(in);
@@ -219,8 +219,8 @@ void negative(Check& check,const std::string& name) {
     else if (name=="system-source2") { in=capture(4,0,0x30200073); in.source2=7; }
     else if (name=="memory-class") { in=capture(4,3); in.memory=true; }
     else if (name=="system-class") { in=memory_capture(2,5,0); in.memory=false; }
-    else if (name=="fence-i" || name=="ecall") { in=capture(4,0,name=="fence-i" ? 0x100fu:0x73u); }
-    else if (name=="fence-source") { in=capture(4,3,0x0ff0800f); }
+    else if (name=="misc-mem" || name=="ecall") { in=capture(4,0,name=="misc-mem" ? 0x200fu:0x73u); }
+    else if (name=="fence-source" || name=="fence-i-source") { in=capture(4,3,name=="fence-source" ? 0x0ff0800fu:0x0000900fu); }
     else if (name.rfind("bad-load-",0)==0 || name.rfind("bad-store-",0)==0) {
         in=memory_capture(name.rfind("bad-load-",0)==0 ? 2:7,5,0);
         in.instruction[0]=(in.instruction[0]&~(7u<<12)) | unsigned(std::stoul(name.substr(name.find_last_of('-')+1)))<<12;

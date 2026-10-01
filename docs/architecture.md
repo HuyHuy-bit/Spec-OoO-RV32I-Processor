@@ -128,7 +128,7 @@ Interrupts are disabled. This target is not a claim of full ISA acceptance.
 | ECALL, EBREAK, illegal instructions and fetch faults | Precise trap path |
 | Loads and stores | Head-only execution with `MEMORY_SERVICE=1`; block dispatch when disabled |
 | FENCE | Serialized full ordering with `MEMORY_SERVICE=1`; waits for older data completion, including store write responses; blocks dispatch when disabled |
-| FENCE.I | Unsupported in the fetched core and blocks dispatch |
+| FENCE.I | With `MEMORY_SERVICE=1`: same barrier as FENCE, then refetches PC+4, discarding the fetch line buffer and older instruction requests; no caches exist yet. Blocks dispatch when disabled |
 
 The [system-core contract](../config/system_core.json) records the supported
 behavior and verification scope.

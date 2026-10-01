@@ -30,13 +30,13 @@ module head_system_controller (
   decoded_t decoded;
   commit_event_t saved_q, base_event;
   logic [12:0] id_q;
-  logic trap_q, mret_q;
+  logic trap_q, redirect_q;
   wire request_ready, response_valid, legal, csr_accept, csr_retired, csr_trap;
   wire [31:0] value, next_pc;
   wire [64:0] unused_state;
   commit_csr_effect_t [3:0] effects;
   wire system_request = system_valid_i && source_ready_i && head_valid_i && system_id_i == head_id_i
-      && (decoded.op != OP_FENCE || order_ready_i);
+      && (!(decoded.op inside {OP_FENCE, OP_FENCE_I}) || order_ready_i);
   wire request = fault_valid_i || system_request;
   wire prepare = request && request_ready;
   wire owner_live = head_valid_i && head_id_i == id_q && head_pc_i == saved_q.pc_before;
@@ -52,7 +52,7 @@ module head_system_controller (
   assign trap_valid_o = response_valid && owner_live && trap_q && fault_valid_i;
   assign serial_id_o = id_q;
   assign illegal_id_o = id_q;
-  assign redirect_o = accepted_trap || (accepted_serial && mret_q);
+  assign redirect_o = accepted_trap || (accepted_serial && redirect_q);
   assign redirect_pc_o = redirect_o ? next_pc : 32'd0;
 
   always_comb begin
@@ -73,7 +73,8 @@ module head_system_controller (
       saved_q <= base_event;
       id_q <= head_id_i;
       trap_q <= fault_valid_i;
-      mret_q <= !fault_valid_i && decoded.op == OP_MRET;
+      // FENCE.I refetches PC+4 so no fetched byte older than its barrier survives.
+      redirect_q <= !fault_valid_i && decoded.op inside {OP_MRET, OP_FENCE_I};
     end
   end
 
@@ -119,7 +120,7 @@ module head_system_controller (
 `ifndef SYNTHESIS
   always_ff @(posedge clk_i) begin
     if (!rst_i && !cancel_i) begin
-      assert (!prepare_o || decoded.op inside {OP_CSR, OP_MRET, OP_WFI} || decoded.op == OP_FENCE)
+      assert (!prepare_o || decoded.op inside {OP_CSR, OP_MRET, OP_WFI, OP_FENCE, OP_FENCE_I})
         else $fatal(1, "HEAD_SYSTEM_OPERATION");
       assert (!fault_valid_i || (head_valid_i && fault_event_i.valid && fault_event_i.trap
               && !fault_event_i.retired && fault_event_i.pc_before == head_pc_i))

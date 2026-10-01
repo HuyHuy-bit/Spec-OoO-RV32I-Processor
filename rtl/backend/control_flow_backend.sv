@@ -99,7 +99,7 @@ module control_flow_backend #(parameter bit SYSTEM_SERVICE = 0, parameter bit ME
     assign payload[lane*64 +: 64] = {frontend_fault_i[lane] ? 32'd0 : pc_i[lane*32 +: 32], executable_instruction[lane*32 +: 32]};
     decode_single decode (.instruction_i(executable_instruction[lane*32 +: 32]), .decoded_o(decoded[lane]));
     assign system_op[lane] = SYSTEM_SERVICE && !frontend_fault_i[lane] && (decoded[lane].op inside {OP_CSR, OP_MRET, OP_WFI}
-      || (MEMORY_SERVICE && decoded[lane].op == OP_FENCE));
+      || (MEMORY_SERVICE && decoded[lane].op inside {OP_FENCE, OP_FENCE_I}));
     assign memory_op[lane] = MEMORY_SERVICE && !frontend_fault_i[lane] && decoded[lane].op inside {OP_LOAD, OP_STORE};
     assign cfi[lane] = decoded[lane].op inside {OP_BRANCH, OP_JAL, OP_JALR};
     assign supported_o[lane] = frontend_fault_i[lane] || ((cfi[lane] || serial_op[lane] || decoded[lane].op inside {OP_ALU, OP_LUI, OP_AUIPC})

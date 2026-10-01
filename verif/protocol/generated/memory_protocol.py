@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-SOURCE_SHA256 = 'b1cb55f0c881293b4df6077f263f8907a347201090777647158e4c2a8b77de1e'
+SOURCE_SHA256 = '64b3225a7572fb45f680f157bcea878e038ed935be1148dacf8fd0c44e4e4b94'
 LINE_BYTES = 32
 REQUEST_FIELD_WIDTHS = {'transaction_id': 4, 'write': 1, 'uncached': 1, 'address': 32, 'uncached_size': 2, 'line_write_data': 256, 'line_write_mask': 32, 'uncached_write_data': 32, 'uncached_write_strobe': 4}
 RESPONSE_FIELD_WIDTHS = {'transaction_id': 4, 'status': 2, 'line_read_data': 256, 'uncached_read_data': 32}

@@ -32,7 +32,7 @@ make head-memory-check
 | --- | --- |
 | `make check-fast` | Foundation, schema, model and reference checks; not the complete two-wide core regression |
 | `make system-core-check` | Connected fetch/integer/control/system core, including traps and redirects |
-| `make memory-core-check` | Fetched loads/stores and ordinary FENCE ordering, real retirement/traps, admission, cancellation and data-port ownership |
+| `make memory-core-check` | Fetched loads/stores, FENCE ordering, FENCE.I self-modifying code, real retirement/traps, admission, cancellation and data-port ownership |
 | `make head-memory-check` | Standalone memory controller with synthetic head/acceptance inputs and real transaction engines |
 
 The [Makefile](../Makefile) and [unit profiles](../tools/unit_profiles.py)
@@ -43,7 +43,7 @@ and full evidence archives stay local.
 
 - Implement the producer behind the cached-store admission interface.
 - Add the remaining memory ordering, load/store queue, forwarding, cache,
-  FENCE.I, and dynamic prediction functionality.
+  cache-aware FENCE.I, and dynamic prediction functionality.
 - Complete the selected ISA and integrated-core verification gates.
 - Measure full-core timing and review the clock target before hardening.
 - Run the LibreLane RTL-to-GDSII flow and report measured implementation results.

@@ -67,7 +67,7 @@ module head_dispatch (
   wire load_op = instruction_i[6:0] == 7'h03
       && instruction_i[14:12] inside {3'd0, 3'd1, 3'd2, 3'd4, 3'd5};
   wire store_op = instruction_i[6:0] == 7'h23 && instruction_i[14:12] <= 2;
-  wire fence_op = instruction_i[6:0] == 7'h0f && instruction_i[14:12] == 0;
+  wire fence_op = instruction_i[6:0] == 7'h0f && instruction_i[14:13] == 0;
   wire system_op = instruction_i inside {32'h30200073, 32'h10500073} || fence_op
       || (instruction_i[6:0] == 7'h73
       && instruction_i[14:12] inside {3'd1, 3'd2, 3'd3, 3'd5, 3'd6, 3'd7});

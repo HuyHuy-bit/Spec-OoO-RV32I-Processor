@@ -70,8 +70,9 @@ mispredict or a trap. See the
   checkpoints for misprediction recovery.
 - **Precise state:** a 32-entry reorder buffer retires up to two instructions per
   cycle in program order. It also handles precise traps, CSRs, MRET and WFI.
-- **Memory path:** loads, stores and FENCE run at the ROB head, with alignment and
-  PMA checks, MMIO ownership and committed-store draining.
+- **Memory path:** loads, stores, FENCE and FENCE.I run at the ROB head, with alignment
+  and PMA checks, MMIO ownership and committed-store draining. FENCE.I then
+  refetches, discarding stale fetched bytes (self-modifying code).
 - **Verification:** directed and random RTL testbenches, Spike lockstep reference
   checks, mutation checks, focused SymbiYosys formal proofs, and synthesis gates
   for each block.
@@ -92,7 +93,7 @@ These are hardware capacities, not measured IPC or frequency figures.
 | Area | Status |
 | --- | --- |
 | Integer, branch, CSR and trap execution | Working and verified at the core level |
-| Head-only loads, stores and FENCE | Working behind `MEMORY_SERVICE=1` |
+| Head-only loads, stores, FENCE and FENCE.I | Working behind `MEMORY_SERVICE=1` (no caches yet) |
 | Load/store queue, forwarding, caches, dynamic prediction | Planned |
 | Full-core timing and LibreLane GDSII | Planned |
 
@@ -104,7 +105,7 @@ You need Python 3, GNU Make, a C++ toolchain, Verilator and the
 ```sh
 export OSS_CAD_SUITE=/path/to/oss-cad-suite
 make system-core-check   # fetched integer/control/system core
-make memory-core-check   # core with loads, stores and FENCE
+make memory-core-check   # core with loads, stores, FENCE and FENCE.I
 ```
 
 See [verification](docs/verification.md) for the full set of gates and the

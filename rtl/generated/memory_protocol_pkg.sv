@@ -1,6 +1,6 @@
 `default_nettype none
 package memory_protocol_pkg;
-  localparam string MEMORY_PROTOCOL_SHA256 = "b1cb55f0c881293b4df6077f263f8907a347201090777647158e4c2a8b77de1e";
+  localparam string MEMORY_PROTOCOL_SHA256 = "64b3225a7572fb45f680f157bcea878e038ed935be1148dacf8fd0c44e4e4b94";
   localparam int unsigned MEM_LINE_BYTES = 32;
   localparam int unsigned MEM_TRANSACTION_ID_BITS = 4;
   typedef enum logic [1:0] {

@@ -12,6 +12,12 @@ struct MemoryBench : Bench {
     unsigned allocations=0, watched_allocations=0, watch_pc=20, data_latency=1, remaining=0, kind=0, bytes=0, cause=0, mask=0, client=0;
     uint32_t address=0, data=0, fault_address=UINT32_MAX;
     MemoryBench() { memory_service=system_service=trap_service=fault_support=true; }
+    // Both ports read the same target bytes; memory[] stays the architectural instruction oracle.
+    uint32_t fetch_word(uint32_t a) const override {
+        uint32_t word=0;
+        for (unsigned n=0;n<4;n++) word|=uint32_t(target.at(a+n))<<(8*n);
+        return word;
+    }
     void drive_memory(const Input&) override {
         d.memory_issue_allowed_i=issue_allowed;
         d.admit_valid_i=admit && d.admission_valid_o;
@@ -109,10 +115,12 @@ struct MemoryBench : Bench {
         allocations+=(d.dispatch_o&1)+((d.dispatch_o>>1)&1);
         if (watch_older_fault && d.trap_accept_o) require(younger_dispatched,"older fault tested with younger memory dispatched");
         require(bool(d.memory_committed_o)==committed,"committed store ownership output");
-        if (pc<65536 && fence(memory[pc/4]) && d.occupancy_o && !system_prepared && d.memory_busy_o) coverage["fence_order_wait"]++;
-        if (d.system_prepare_o && pc<65536 && fence(memory[pc/4])) {
+        const bool barrier=pc<65536 && (fence(memory[pc/4]) || fence_i(memory[pc/4]));
+        const std::string name=barrier && fence_i(memory[pc/4]) ? "fence_i_":"fence_";
+        if (barrier && d.occupancy_o && !system_prepared && d.memory_busy_o) coverage[name+"order_wait"]++;
+        if (d.system_prepare_o && barrier) {
             require(!prepared && !committed && (!accepted || answered) && target==architectural,"FENCE prepared before older memory completion");
-            coverage["fence_prepare"]++;
+            coverage[name+"prepare"]++;
         }
         if (fatal && !offered && !committed) require(!d.data_request_valid_o,"new data request after frontend fatal");
         if (data_fatal && !held) require(!d.request_valid_o,"new instruction request after data fatal");
@@ -160,14 +168,20 @@ struct MemoryBench : Bench {
         return Bench::expected();
     }
     void memory_retired(const Expected& e) override {
-        if (e.op==34) {
+        if (e.op==34 || e.op==35) {
             require(!prepared && !committed && (!accepted || answered) && target==architectural,"FENCE retired before older memory completion");
             return;
         }
         if (e.op!=32 && e.op!=33) return;
         require(prepared,"memory acceptance owner");
         if (store) {
-            for (unsigned n=0;n<bytes;n++) architectural[address+n]=uint8_t(data>>(8*n));
+            for (unsigned n=0;n<bytes;n++) {
+                architectural[address+n]=uint8_t(data>>(8*n));
+                if (address+n<65536) {
+                    const unsigned shift=8*((address+n)%4);
+                    memory[(address+n)/4]=(memory[(address+n)/4]&~(255U<<shift))|((data>>(8*n))&255)<<shift;
+                }
+            }
             if (uncached) require(answered && target==architectural,"MMIO store completion before retirement");
             else { committed=true; coverage["store_commit"]++; }
         }
@@ -185,7 +199,7 @@ static uint32_t mem(bool store,unsigned kind,unsigned rd,unsigned rs1,unsigned r
                  : imm<<20|rs1<<15|kind<<12|rd<<7|3;
 }
 static void initialize(MemoryBench& b) {
-    b.memory.fill(0x0000100f);
+    b.memory.fill(instruction(2,0,0,0,0));
     for (unsigned n=0x4000/4;n<0x4100/4;n++) b.memory[n]=0x81fe80ffU+n;
     b.memory[0]=instruction(0,1,0,0,0x4000);
     b.memory[1]=instruction(0,2,0,0,0x87654000);
@@ -194,14 +208,20 @@ static void initialize(MemoryBench& b) {
     b.watch_older_fault=b.watch_branch_fence=b.younger_dispatched=b.bad_response=false; b.watch_pc=20;
     b.issue_allowed=b.admit=b.data_ready=true; b.wrong_admit=false; b.fault_address=UINT32_MAX;
 }
+// Completion withholds retirement at the stop PC: its marker must reach the head with all older work drained.
+static Input hold_at(const MemoryBench& b,uint32_t stop,Input i) {
+    if (b.pc==stop) i.retire=0;
+    else if (b.pc+4==stop) i.retire&=1;
+    return i;
+}
 static bool terminal(const MemoryBench& b,uint32_t stop) {
-    return b.pc==stop && !b.d.occupancy_o && !b.d.memory_busy_o && !b.d.fetch_busy_o
-        && (b.d.unsupported_o&1) && uint32_t(b.d.fetch_pc_o)==stop;
+    return b.pc==stop && (b.d.retire_valid_o&1) && get32(b.d.retire_event_o,PC_BEFORE_OFFSET,32)==stop
+        && !b.d.memory_busy_o && !b.d.fetch_busy_o && !b.d.system_busy_o;
 }
 template<class Stimulus>
 static void run_until(MemoryBench& b,uint32_t stop,Stimulus stimulus) {
     for (unsigned n=0;n<15000;n++) {
-        b.tick(stimulus(n));
+        b.tick(hold_at(b,stop,stimulus(n)));
         b.require(!b.fatal,"unexpected fatal");
         if (terminal(b,stop)) {
             b.require(!b.prepared && !b.committed && !b.system_prepared && (!b.offered || b.answered)
@@ -210,8 +230,8 @@ static void run_until(MemoryBench& b,uint32_t stop,Stimulus stimulus) {
         }
     }
     b.require(false,"memory program watchdog pc="+std::to_string(b.pc)
-        +" occupancy="+std::to_string(b.d.occupancy_o)+" memory_busy="+std::to_string(b.d.memory_busy_o)
-        +" fetch_busy="+std::to_string(b.d.fetch_busy_o)+" unsupported="+std::to_string(b.d.unsupported_o));
+        +" memory_busy="+std::to_string(b.d.memory_busy_o)+" fetch_busy="+std::to_string(b.d.fetch_busy_o)
+        +" occupancy="+std::to_string(b.d.occupancy_o)+" head="+std::to_string(b.d.retire_valid_o));
 }
 static void run(MemoryBench& b,uint32_t stop,std::mt19937& rng) {
     run_until(b,stop,[&](unsigned) {
@@ -223,7 +243,7 @@ static void run(MemoryBench& b,uint32_t stop,std::mt19937& rng) {
     });
 }
 static void drain_setup(MemoryBench& b) {
-    initialize(b); b.memory[4]=mem(true,2,0,1,2); b.reset();
+    initialize(b); b.memory[4]=mem(true,2,0,1,2); b.memory[5]=0x0ff0000f; b.reset();
     b.data_ready=false; b.data_latency=30;
     for (unsigned n=0;n<1000 && !b.committed;n++) b.tick();
     b.require(b.committed,"drain committed-store setup");
@@ -239,10 +259,9 @@ int main(int argc,char** argv) {
         std::mt19937 rng(seed); MemoryBench b;
         if (negative && argc>2 && std::string(argv[2])=="watchdog") {
             initialize(b); b.memory[4]=mem(true,2,0,1,2); b.reset(); b.data_ready=false;
-            for (unsigned n=0;n<1000 && !(b.pc==20 && !b.d.occupancy_o
-                    && (b.d.unsupported_o&1) && uint32_t(b.d.fetch_pc_o)==20 && !b.d.fetch_busy_o);n++) b.tick();
-            b.require(b.pc==20 && b.committed && b.d.memory_busy_o && !b.d.occupancy_o
-                && (b.d.unsupported_o&1) && uint32_t(b.d.fetch_pc_o)==20 && !b.d.fetch_busy_o,"terminal guard setup");
+            const auto ready=[&] { return b.pc==20 && (b.d.retire_valid_o&1) && !b.d.fetch_busy_o; };
+            for (unsigned n=0;n<1000 && !ready();n++) b.tick(hold_at(b,20,Input{}));
+            b.require(ready() && b.committed && b.d.memory_busy_o,"terminal guard setup");
             run_until(b,20,[&](unsigned) { b.data_ready=false; return Input{}; });
             throw std::runtime_error("terminal accepted undrained committed store");
         }
@@ -386,28 +405,32 @@ int main(int argc,char** argv) {
         b.require(!b.d.memory_busy_o,"committed drain progress");
         { Input i; i.enable=false; i.drain=true; b.tick(i); }
         b.coverage["memory_drain"]++;
-        // FENCE after each older memory class, under bus stalls and retire backpressure.
+        // Ordinary FENCE (kind 0) and FENCE.I (kind 1) share the head barrier; reserved fields are ignored.
+        const std::array<std::array<uint32_t,3>,2> fences{{{0x0ff0000f,0xffff808f,0x8330000f},{0x0000100f,0xffff908f,0x8330100f}}};
+        for (unsigned kind=0;kind<2;kind++) {
+        const std::string key=kind ? "fence_i_":"fence_";
+        // A barrier after each older memory class, under bus stalls and retire backpressure.
         for (unsigned test=0;test<12;test++) {
             initialize(b); unsigned at=4;
             if (test%4<3) b.memory[at++]=mem(test%4!=2,2,4,test%4==1 ? 3:1,2);
-            b.memory[at++]=test%2 ? 0xffff808f:0x0ff0000f;
-            if (test>=8) b.memory[at++]=0x8330000f;
+            b.memory[at++]=fences[kind][test%2];
+            if (test>=8) b.memory[at++]=fences[kind][2];
             b.memory[at++]=csr(0xb02,2,0,6);
             b.reset(); b.data_ready=test<4; b.data_latency=60;
-            const auto fences=b.coverage["fence_retired"];
+            const auto retired=b.coverage[key+"retired"];
             run_until(b,at*4,[&](unsigned n) {
                 Input i; i.retire=test>=4 && test<8 && b.system_prepared ? n%3==0:3;
                 b.data_ready=test<4 || n%5==0; return i;
             });
             b.require(b.regs[6]==4+(test%4<3)+1+(test>=8)
-                && b.coverage["fence_retired"]==fences+1+(test>=8),"FENCE retirement count");
-            b.coverage[test%4==3 ? "fence_empty":test%4==2 ? "fence_after_load":test%4==1 ? "fence_after_mmio":"fence_after_store"]++;
-            if (test>=8) b.coverage["fence_back_to_back"]++;
+                && b.coverage[key+"retired"]==retired+1+(test>=8),"FENCE retirement count");
+            b.coverage[key+(test%4==3 ? "empty":test%4==2 ? "after_load":test%4==1 ? "after_mmio":"after_store")]++;
+            if (test>=8) b.coverage[key+"back_to_back"]++;
         }
-        // Flush or reset while FENCE waits for order or is held at retirement; older faults beat a younger FENCE.
+        // Flush or reset while the barrier waits for order or is held at retirement; older faults beat it.
         for (unsigned held=0;held<2;held++) for (unsigned cancel=0;cancel<3;cancel++) {
-            initialize(b); b.memory[4]=mem(true,2,0,1,2); b.memory[5]=0x0ff0000f;
-            b.memory[0x800/4]=0x0ff0000f; b.memory[0x804/4]=csr(0xb02,2,0,6);
+            initialize(b); b.memory[4]=mem(true,2,0,1,2); b.memory[5]=fences[kind][0];
+            b.memory[0x800/4]=fences[kind][0]; b.memory[0x804/4]=csr(0xb02,2,0,6);
             b.reset(); b.data_latency=60;
             unsigned reached=0;
             for (unsigned n=0;n<2000 && reached<4;n++) {
@@ -415,32 +438,35 @@ int main(int argc,char** argv) {
                 if (held ? b.system_prepared:b.pc==20 && b.committed && b.d.occupancy_o && b.d.memory_busy_o && !b.system_prepared) reached++;
             }
             b.require(reached==4,"FENCE cancellation watchdog");
+            const auto redirects=b.coverage["fence_i_redirect"];
             if (cancel==1) b.reset();
             else if (cancel==0) { Input i; i.flush=true; i.target=0x800; b.tick(i); run(b,0x808,rng); }
             else {
-                b.bad_response=true; b.tick(); b.bad_response=false; b.data_fatal=true;
+                b.bad_response=true; { Input i; i.retire=0; b.tick(i); } b.bad_response=false; b.data_fatal=true;
                 const auto retired=b.retired;
                 for (unsigned n=0;n<40;n++) { Input i; i.retire=3; b.tick(i); }
                 b.require(b.retired==retired && b.d.memory_fatal_o && !b.d.retire_accept_o,"FENCE retired after data fatal");
             }
-            b.coverage[std::string(held ? "fence_held_":"fence_wait_")+(cancel==1 ? "reset":cancel ? "fatal":"flush")]++;
+            b.require(b.coverage["fence_i_redirect"]==redirects+(kind && !cancel),"FENCE.I redirect count after cancellation");
+            b.coverage[key+(held ? "held_":"wait_")+(cancel==1 ? "reset":cancel ? "fatal":"flush")]++;
         }
-        initialize(b); b.memory[4]=mem(true,2,0,1,2); b.memory[5]=0xffffffff; b.memory[6]=0x0ff0000f;
+        initialize(b); b.memory[4]=mem(true,2,0,1,2); b.memory[5]=0xffffffff; b.memory[6]=fences[kind][0];
         b.memory[0x100/4]=csr(0x342,2,0,10); b.reset(); b.watch_older_fault=true; b.watch_pc=24; b.data_latency=60;
         for (unsigned n=0;n<1000 && !b.younger_dispatched;n++) { b.data_ready=false; b.tick(); }
         b.require(b.younger_dispatched && b.committed,"younger FENCE allocation watchdog"); run(b,0x104,rng);
-        b.require(b.regs[10]==2,"older fault behind FENCE"); b.coverage["older_fault_fence"]++;
-        // Hold an older branch until the wrong-path fence owns the next ROB slot.
+        b.require(b.regs[10]==2,"older fault behind FENCE"); b.coverage["older_fault_"+key.substr(0,key.size()-1)]++;
+        // Hold an older branch until the wrong-path barrier owns the next ROB slot.
         for (unsigned pad:{0u,27u}) {
             initialize(b); unsigned at=4;
             for (unsigned n=0;n<pad;n++) b.memory[at++]=instruction(2,0,0,0,0);
             const unsigned branch_pc=at*4;
             b.memory[at++]=instruction(21,0,0,0,16);
-            b.memory[at++]=0x0ff0000f;
+            b.memory[at++]=fences[kind][0];
             b.memory[at++]=instruction(2,8,0,0,0x66); b.memory[at++]=instruction(2,8,0,0,0x77);
-            b.memory[at++]=0x8330000f;
+            b.memory[at++]=fences[kind][2];
             b.memory[at++]=instruction(2,8,0,0,0x55); b.memory[at++]=csr(0xb02,2,0,6);
-            const auto retired=b.retired, prepares=b.coverage["fence_prepare"], fences=b.coverage["fence_retired"], redirects=b.coverage["branch_redirect"];
+            const auto retired=b.retired, prepares=b.coverage[key+"prepare"], fences_retired=b.coverage[key+"retired"];
+            const auto redirects=b.coverage["branch_redirect"], refetches=b.coverage["fence_i_redirect"];
             b.reset(); b.watch_branch_fence=true; b.watch_pc=branch_pc+4;
             Input held; held.grant=false;
             for (unsigned n=0;n<1000 && !(b.younger_dispatched && b.pc==branch_pc && b.d.occupancy_o==2);n++) b.tick(held);
@@ -449,15 +475,77 @@ int main(int argc,char** argv) {
             for (unsigned n=0;n<20;n++) {
                 b.tick(held);
                 b.require(b.pc==branch_pc && b.d.occupancy_o==2 && b.allocations==pad+6 && !b.system_prepared
-                    && b.coverage["fence_prepare"]==prepares && b.coverage["fence_retired"]==fences,"wrong-path FENCE held barrier");
+                    && b.coverage[key+"prepare"]==prepares && b.coverage[key+"retired"]==fences_retired,"wrong-path FENCE held barrier");
             }
             for (unsigned n=0;n<100 && b.coverage["branch_redirect"]==redirects;n++) b.tick();
             b.require(b.coverage["branch_redirect"]==redirects+1,"FENCE branch recovery watchdog");
             run(b,at*4,rng);
-            b.require(b.coverage["fence_prepare"]==prepares+1 && b.coverage["fence_retired"]==fences+1
-                && b.coverage["branch_redirect"]==redirects+1 && b.regs[8]==0x55
-                && b.regs[6]==pad+7 && b.retired==retired+pad+8,"FENCE squash, reuse and retirement count");
-            b.coverage[pad ? "fence_branch_squash_wrap":"fence_branch_squash"]++;
+            b.require(b.coverage[key+"prepare"]==prepares+1 && b.coverage[key+"retired"]==fences_retired+1
+                && b.coverage["branch_redirect"]==redirects+1 && b.coverage["fence_i_redirect"]==refetches+kind
+                && b.regs[8]==0x55 && b.regs[6]==pad+7 && b.retired==retired+pad+8,"FENCE squash, reuse and retirement count");
+            b.coverage[key+(pad ? "branch_squash_wrap":"branch_squash")]++;
+        }
+        }
+        // Self-modifying code: the old word is fetched before a byte, half or word store replaces it.
+        // Only the replacement may execute after FENCE.I, under random, slow-data and held-retirement stimulus.
+        const uint32_t old_word=instruction(2,8,0,0,0x111);
+        for (unsigned test=0;test<48;test++) {
+            const unsigned width=test%3, slot=(test/3)%8, style=test/24;
+            // Replacement bytes keep a valid ADDI x8 whose source stays x0.
+            const uint32_t value=std::array<uint32_t,3>{0xa5,0xa5c0,instruction(2,8,0,0,0x5a5)}[width];
+            const unsigned offset=4-(1U<<width), shift=8*offset;
+            const uint32_t mask=width==2 ? UINT32_MAX:((1U<<(8U<<width))-1)<<shift;
+            const uint32_t new_word=(old_word&~mask)|((value<<shift)&mask);
+            initialize(b); unsigned at=4;
+            b.memory[at++]=instruction(0,9,0,0,(value+0x800)&0xfffff000U);
+            b.memory[at++]=instruction(2,9,9,0,value&4095);
+            while (at<7 || (at+1)%8!=slot) b.memory[at++]=instruction(2,0,0,0,0);
+            const unsigned replaced=at+2+style;
+            b.memory[at++]=mem(true,width,0,0,9,int(replaced*4+offset));
+            b.memory[at++]=0x0000100f;
+            if (style) b.memory[at++]=0xffff908f;
+            b.memory[at++]=old_word;
+            b.memory[at++]=csr(0xb02,2,0,6);
+            b.reset();
+            const auto stale=b.coverage["stale_fetch_visible"], refetches=b.coverage["fence_i_redirect"];
+            run_until(b,at*4,[&](unsigned n) {
+                Input i; i.retire=style && b.system_prepared ? n%3==0:rng()%4; i.request_ready=rng()%3!=0; i.latency=rng()%5;
+                b.data_ready=style ? n%5==0:rng()%3!=0; b.data_latency=style ? 40:rng()%9;
+                return i;
+            });
+            b.require(b.memory[replaced]==new_word && b.regs[8]==extend(new_word>>20,12) && b.regs[6]==replaced+1,"self-modified instruction result");
+            b.require(b.coverage["fence_i_redirect"]==refetches+1+style,"FENCE.I refetch count");
+            if (b.coverage["stale_fetch_visible"]>stale) b.coverage["smc_stale_buffered"]++;
+            b.coverage["smc_width_"+std::to_string(width)]++;
+        }
+        // FENCE.I ends a line, so the next line's old fetch request crosses the barrier.
+        for (unsigned mode=0;mode<3;mode++) {
+            initialize(b);
+            const uint32_t value=instruction(2,8,0,0,0x2c3);
+            b.memory[4]=instruction(0,9,0,0,(value+0x800)&0xfffff000U); b.memory[5]=instruction(2,9,9,0,value&4095);
+            b.memory[6]=mem(true,2,0,0,9,32); b.memory[7]=0x0000100f;
+            b.memory[8]=old_word; b.memory[9]=csr(0xb02,2,0,6);
+            b.reset(); b.data_ready=false;
+            const auto request=[&] { return b.d.request_valid_o && get32(b.d.request_o,REQUEST_ADDRESS_OFFSET,32)==32; };
+            bool reached=false;
+            for (unsigned n=0;n<1000 && !reached;n++) {
+                Input i; i.request_ready=!(mode==0 && request()); i.latency=request() ? 1000:1; b.tick(i);
+                reached=b.committed && (mode==0 ? b.held:b.pending && b.pending_address==32);
+            }
+            b.require(reached && (mode==0 || b.pending_line[0]==old_word),"old FENCE.I line request setup");
+            b.data_ready=true;
+            for (unsigned n=0;n<1000 && !(b.system_prepared && (b.d.retire_valid_o&1));n++) { Input i; i.retire=0; i.request_ready=mode!=0; b.tick(i); }
+            b.require(b.system_prepared && (b.d.retire_valid_o&1) && !b.committed && (mode==0 ? b.held:b.pending),"held FENCE.I with old fetch traffic");
+            const auto stale=b.coverage["stale_response"], pending=b.coverage["redirect_pending"], stalled=b.coverage["redirect_request_stall"];
+            const auto refetches=b.coverage["fence_i_redirect"];
+            if (mode==2) b.delay=0;
+            { Input i; i.request_ready=false; b.tick(i); }
+            b.require(b.coverage["fence_i_redirect"]==refetches+1 && (mode==0 ? b.coverage["redirect_request_stall"]==stalled+1:b.coverage["redirect_pending"]==pending+1),"FENCE.I redirect over old fetch traffic");
+            if (mode==2) b.require(!b.pending && b.coverage["stale_response"]==stale+1,"response coincident with FENCE.I redirect");
+            b.delay=0;
+            run(b,40,rng);
+            b.require(b.regs[8]==0x2c3 && b.coverage["stale_response"]==stale+(mode!=0),"stale FENCE.I response discarded");
+            b.coverage[std::array<const char*,3>{"fence_i_held_request","fence_i_delayed_response","fence_i_coincident_response"}[mode]]++;
         }
         for (unsigned round=0;round<20;round++) {
             initialize(b); unsigned at=4;
@@ -467,7 +555,7 @@ int main(int argc,char** argv) {
                 b.memory[at++]=mem(store,kind,4,1,2,offset);
                 b.memory[at++]=instruction(2,2,2,0,int(rng()%31)-15);
                 if (n%7==0) { b.memory[at++]=instruction(27,0,0,0,8); b.memory[at++]=mem(true,2,0,3,2); }
-                if (rng()%4==0) b.memory[at++]=std::array<uint32_t,4>{0x0ff0000f,0x0000000f,0xffff808f,0x8330000f}[rng()%4];
+                if (rng()%4==0) b.memory[at++]=std::array<uint32_t,6>{0x0ff0000f,0x0000000f,0xffff808f,0x8330000f,0x0000100f,0xffff908f}[rng()%6];
             }
             b.memory[at++]=csr(0xb02,2,0,6);
             b.reset(); run(b,at*4,rng); b.coverage["random_program"]++;
