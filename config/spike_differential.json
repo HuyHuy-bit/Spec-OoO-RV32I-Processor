@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "profile": "fetched_memory_core_spike_differential",
+  "dut": "fetch_execution_core with config/memory_core.json parameters (FRONTEND_FAULTS=1, TRAP_SERVICE=1, MEMORY_SERVICE=1)",
+  "seeds": [
+    1,
+    42,
+    20260906
+  ],
+  "extra_modes": [
+    "stall",
+    "reset_fetch",
+    "reset_data",
+    "reset_commit"
+  ],
+  "spike_bram_base": "0x6a5c0000",
+  "spike_step_limit": 400000,
+  "spike_substitutions": {
+    "0x10500073": "0x00000013"
+  },
+  "spike_identity_reads": {
+    "0xf12": "0x00000005"
+  },
+  "reference": "The pinned stock Spike maps its debug module at address 0, so the same program is regenerated with every BRAM address offset by spike_bram_base. A locked-PMP setup prefix outside BRAM reproduces the platform device PMAs: UART and GPIO windows are read/write and non-executable, and the rest of the device page faults. Spike events are mapped back by subtracting the base from values inside the relocated BRAM window and from LUI immediates.",
+  "events": "Spike -l --log-commits records are rewritten into the Sail step format and normalized by the same parser. Spike supplies PCs, instructions, GPR writes, CSR writes, memory addresses, store data, trap causes and trap values.",
+  "completion": "The RTL must retire exactly the Spike event count up to the final self-loop, with the same drain, fatal and short-trace rules as the Sail differential.",
+  "limitations": [
+    "Spike halts in WFI without an interrupt source, so WFI words are replaced with NOP in the Spike image only and the comparison keeps the original WFI encoding at that PC.",
+    "Spike reports its registered marchid 5; that one read is replaced by the platform marchid. Any other value fails.",
+    "Spike does not log trap-time CSR writes or load data. Trap mstatus is derived from the platform MIE/MPIE rule, and load data comes from a byte memory initialized from the image and updated only by Spike's logged stores; GPR load results must agree with it.",
+    "A Spike value that differs from the RTL by exactly spike_bram_base would be accepted as relocated.",
+    "Transport fault injection remains in memory-core-check; this differential exercises architectural PMA faults.",
+    "This is not ACT4 acceptance, full ISA coverage, formal proof or two-wide phase closure."
+  ]
+}

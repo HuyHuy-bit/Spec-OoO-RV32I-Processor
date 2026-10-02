@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "profile": "dense_memory_wrapper_1rw_v0",
+  "purpose": "Target-neutral semantics of a dense-memory wrapper leaf. Behavioral, G0 register and G1 macro providers must all meet this contract; the geometry ADR enumerates the shapes a target accepts.",
+  "port": "1rw",
+  "read_latency": 1,
+  "accesses_per_cycle": 1,
+  "byte_granularity": 8,
+  "legal_shapes": {
+    "depth_min": 16,
+    "depth_max": 1024,
+    "depth_power_of_two": true,
+    "width_min": 1,
+    "width_max": 128,
+    "masked_width_multiple": 8,
+    "rule": "A masked shape has one write-mask bit per 8-bit byte. An unmasked shape, such as a tag array, has one mask bit for the whole word."
+  },
+  "throughput": "One read or one write per cycle. A dual-port or read-during-write form is a separate contract, not a parameter of this one.",
+  "polarity": "Enable, write enable and write-mask bits are active high at the wrapper. Providers convert to macro polarity.",
+  "output_hold": "Read data is defined only in the cycle read_latency cycles after the read was accepted. In every other cycle, including after a write, an idle cycle or reset, the output is unknown; consumers register what they need.",
+  "enable_low": "When enable is low, write enable, address, data and mask are ignored and may be unknown.",
+  "write_mask": "A write changes exactly the bytes whose mask bit is set. A write with an all-zero mask is a legal no-op that still uses the port.",
+  "collision": "The single port cannot read and write in one cycle. A read accepted in the cycle after a write to the same address returns the written bytes.",
+  "reset": "Payload is not reset. Reset drops in-flight reads and makes the output unknown; array contents are unchanged.",
+  "unknown_data": "Unwritten bytes and bytes written with unknown data read as unknown. An enabled request with an unknown or out-of-range address, an unknown write enable, or a wrong-width mask is illegal."
+}

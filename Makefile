@@ -9,7 +9,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: a1-check
 .PHONY: single-lane-check single-lane-synth-check
 .PHONY: act4-tools act4-core-check act4-fetched-check
-.PHONY: sail-log-check sail-differential-check sail-fetched-differential-check
+.PHONY: sail-log-check sail-differential-check sail-fetched-differential-check spike-fetched-differential-check
 .PHONY: architectural-slice-check architectural-slice-evidence-check architectural-slice-checker-test
 .PHONY: assert-portability
 .PHONY: rename-ownership-check rename-recovery-ownership-check
@@ -28,7 +28,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: rename-bundle-check
 .PHONY: rename-state-check rename-checkpoints-check rename-recovery-check
 .PHONY: formal-readiness-check formal-readiness-evidence-check formal-readiness-checker-test
-.PHONY: occupancy-check occupancy-sweep
+.PHONY: occupancy-check occupancy-sweep dense-memory-check
 
 doctor:
 	@python3 tools/doctor.py --lock config/toolchain.lock --profile "$(PROFILE)"
@@ -231,6 +231,9 @@ occupancy-check:
 occupancy-sweep:
 	@python3 -m model.occupancy
 
+dense-memory-check:
+	@python3 -m unittest -v tests/test_dense_memory.py
+
 sail-log-check:
 	@python3 -m unittest -v tests/test_sail_log.py
 
@@ -240,10 +243,13 @@ sail-differential-check:
 sail-fetched-differential-check:
 	@python3 tools/run_sail_differential.py --dut fetched --sail "$(ACT4_SAIL)"
 
+spike-fetched-differential-check:
+	@python3 tools/run_sail_differential.py --dut fetched --reference spike --spike "$(LOCKSTEP_SPIKE)"
+
 single-lane-synth-check:
 	@python3 tools/run_single_lane.py --synth --mutations --suite "$(OSS_CAD_SUITE)"
 
-check-fast: unit-runner-check platform-check event-check memory-check lockstep-check act4-check prf-check a1-probe-check single-lane-check sail-log-check occupancy-check architectural-slice-checker-test
+check-fast: unit-runner-check platform-check event-check memory-check lockstep-check act4-check prf-check a1-probe-check single-lane-check sail-log-check occupancy-check dense-memory-check architectural-slice-checker-test
 	@python3 tools/check_s0.py
 	@git diff --check
 

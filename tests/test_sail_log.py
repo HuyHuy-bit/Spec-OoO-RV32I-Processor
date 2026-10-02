@@ -2,8 +2,9 @@ import copy
 import unittest
 
 from model.iss.sail_log import parse_sail_log, SailLogError
+from model.iss.spike_log import relocate, spike_sail_trace, SpikeLogError
 from tools.run_sail_differential import packets
-from verif.core.programs import i, store, branch, csr
+from verif.core.programs import i, store, branch, csr, constant
 from verif.lockstep.comparator import compare_traces, ComparisonError
 
 
@@ -89,6 +90,52 @@ class SailLogTest(unittest.TestCase):
         expected = parse_sail_log(CSR_TRACE); actual = copy.deepcopy(expected)
         actual[1]['csr_effects'][0]['new_value'] ^= 1
         with self.assertRaises(ComparisonError): compare_traces(packets(expected),packets(actual))
+
+
+BASE = 0x6a5c0000
+
+
+def spike(lines):
+    """Spike -l --log-commits text: (pc offset, instruction, commit tail or exception tuple)."""
+    out = []
+    for pc, ins, effect in lines:
+        out.append(f'core   0: 0x{BASE+pc:08x} (0x{ins:08x}) text')
+        if isinstance(effect, tuple):
+            out.append(f'core   0: exception {effect[0]}, epc 0x{BASE+pc:08x}')
+            if effect[1] is not None: out.append(f'core   0:           tval 0x{effect[1]:08x}')
+        else: out.append(f'core   0: 3 0x{BASE+pc:08x} (0x{ins:08x}){effect}')
+    return '\n'.join(out)+'\n'
+
+
+LUI, ADDI = constant(28,BASE+0x8000)
+SPIKE = [(0,LUI,f' x28 0x{BASE+0x8000:08x}'),(4,ADDI,f' x28 0x{BASE+0x8000:08x}'),
+         (8,store(28,0,1,0),f' mem 0x{BASE+0x8001:08x} 0x00'),(12,i(0,28,0,0,3),f' mem 0x{BASE+0x8000:08x}'),
+         (16,i(2,28,0,0,3),f' x2  0xffffffff mem 0x{BASE+0x8000:08x}'),(20,csr(3,0,0xf12,2),' x3  0x00000005'),
+         (24,0x13,''),(28,0x73,('trap_machine_ecall',None)),(256,0x30200073,' c768_mstatus 0x00001880 c784_mstatush 0x00000000'),
+         (32,branch(0,0,0),''),(32,branch(0,0,0),'')]
+
+
+class SpikeLogTest(unittest.TestCase):
+    def convert(self, lines=SPIKE):
+        return relocate(parse_sail_log(spike_sail_trace(spike(lines),{BASE+0x8000:0xff},0,{BASE+24:0x10500073},
+                                                        {0xf12:(5,0)},0x1800)),BASE,0x10000)
+
+    def test_relocation_shadow_loads_masks_and_traps(self):
+        events = self.convert()
+        self.assertEqual((events[0]['instruction'],events[1]['rd_value']),(constant(28,0x8000)[0],0x8000))
+        self.assertEqual((events[3]['mem_address'],events[3]['mem_read_data']),(0x8000,0xff))
+        self.assertEqual(events[4]['rd_value'],0xffffffff)
+        self.assertEqual((events[5]['rd_value'],events[5]['csr_effects'][0]['old_value']),(0,0))
+        self.assertEqual(events[6]['instruction'],0x10500073)
+        self.assertEqual((events[7]['trap_cause'],events[7]['pc_after']),(11,256))
+        self.assertEqual([e['new_value'] for e in events[7]['csr_effects']],[0x1800,28,11,0])
+        self.assertEqual(events[8]['pc_after'],32)
+
+    def test_rejects_inconsistent_spike_records(self):
+        for lines in ([*SPIKE[:4],(16,i(2,28,0,0,3),f' x2  0x00000001 mem 0x{BASE+0x8000:08x}')],
+                      [*SPIKE[:5],(20,csr(3,0,0xf12,2),' x3  0x00000006'),*SPIKE[6:]],
+                      [*SPIKE[:7],(28,0x73,('trap_hypervisor_ecall',None))]):
+            with self.assertRaises((SpikeLogError,SailLogError)): self.convert(lines)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare RTL architectural events with the pinned Sail model under stalls/reset."""
+"""Compare RTL architectural events with the pinned Sail or Spike model under stalls/reset."""
 import argparse
 import copy
 import hashlib
@@ -12,10 +12,13 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from model.iss.sail_log import parse_sail_log
+from model.iss.spike_log import relocate, spike_sail_trace
 from tools.act4_tools import SAIL
 from tools.check_act4 import check_harness, check_sail
 from tools.run_single_lane import OUT as CORE_OUT, build_core, check_trace, make_header
+from tools.run_lockstep_smoke import verify_spike
 from verif.core.differential_programs import program
+from verif.core.programs import i, csr, constant
 from verif.core.reference import unpack_event
 from verif.lockstep.comparator import compare_traces, ComparisonError
 
@@ -116,19 +119,97 @@ def coverage(events):
     return dict(trap_causes=traps,branch_forms=branches,csr_forms=csr_forms,load_forms=loads,store_forms=stores)
 
 
+def napot(base, size):
+    if size < 8 or size & (size-1) or base % size: raise ValueError('region is not a NAPOT block')
+    return (base >> 2) | ((size >> 3)-1)
+
+
+def spike_layout(platform, bias):
+    """Spike memory map and a locked-PMP setup prefix reproducing the platform device PMAs."""
+    regions = platform['memory']['regions']
+    bram = next(r for r in regions if r['name'] == 'bram')
+    devices = [r for r in regions if r is not bram]
+    if any(r['execute'] for r in devices): raise ValueError('Spike PMP prefix assumes non-executable devices')
+    start = min(int(r['base'],0) for r in devices)
+    span = 1 << (max(int(r['base'],0)+int(r['size'],0) for r in devices)-start-1).bit_length()
+    entries = [(napot(int(r['base'],0),int(r['size'],0)), 0x98 | r['write'] << 1 | r['read']) for r in devices]
+    entries.append((napot(start,span),0x98))
+    if len(entries) > 4: raise ValueError('Spike prefix uses one pmpcfg register')
+    prefix = []
+    for n,(address,_) in enumerate(entries): prefix += constant(5,address)+[csr(0,5,0x3b0+n,1)]
+    prefix += constant(5,sum(cfg << 8*n for n,(_,cfg) in enumerate(entries)))+[csr(0,5,0x3a0,1)]
+    prefix += constant(5,bias)+[i(0,5,0,0,0x67)]
+    size = int(bram['size'],0)
+    memory = f'-m0x{bias:x}:0x{size+0x1000:x},0x{start:x}:0x{max(span,0x1000):x}'
+    return prefix, size, memory
+
+
+def spike_reference(spike, settings, seed, out, run):
+    """Run the relocated image on Spike and return platform-addressed events."""
+    platform = json.loads((ROOT/'config/platform.yaml').read_text())
+    bias = int(settings['spike_bram_base'],0)
+    prefix, size, memory = spike_layout(platform, bias)
+    image,_,end_pc = program(seed, True, bias)
+    swaps = {int(k,0):int(v,0) for k,v in settings['spike_substitutions'].items()}
+    blob = bytearray(image) + bytearray(size-len(image))
+    substitutions = {}
+    for n in range(0,len(image),4):
+        word = int.from_bytes(blob[n:n+4],'little')
+        if word in swaps:
+            blob[n:n+4] = swaps[word].to_bytes(4,'little'); substitutions[bias+n] = word
+    blob += b''.join(w.to_bytes(4,'little') for w in prefix)
+    raw = out/f'{seed}_spike.bin'; raw.write_bytes(blob)
+    assembly = out/f'{seed}_spike.S'
+    assembly.write_text(f'.text\n.globl _start\n_start:\n.incbin "{raw.relative_to(ROOT)}"\n')
+    elf = out/f'{seed}_spike.elf'
+    run(['riscv64-unknown-elf-gcc','-march=rv32i','-mabi=ilp32','-nostdlib','-nostartfiles',
+         f'-Wl,--no-relax,--build-id=none,-n,-Ttext=0x{bias:x},-e,0x{bias+size:x}',assembly,'-o',elf],f'compile_{seed}_spike.log')
+    # Spike's step limit is consumed in scheduler quanta that traps cut short, so stop on the end loop instead.
+    process = subprocess.Popen([str(spike),'--isa=rv32i_zicsr_zifencei','--priv=m','--pmpregions=4','--triggers=0',
+        '--disable-dtb',f'--pc=0x{bias+size:x}',f'--instructions={settings["spike_step_limit"]}','-l','--log-commits',
+        memory,str(elf)],cwd=ROOT,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    lines = []; ends = 0
+    for line in process.stdout:
+        lines.append(line)
+        if line.startswith('core   0: 3 ') and int(line.split()[3],16) == end_pc:
+            ends += 1
+            if ends == 2: break
+    process.kill(); process.wait()
+    log = ''.join(lines); (out/f'spike_{seed}.log').write_text(log)
+    if ends < 2: raise RuntimeError(f'Spike did not reach program end; see {out}/spike_{seed}.log')
+    memory_bytes = {bias+n:b for n,b in enumerate(blob)}
+    identity = {int(k,0):(int(v,0),int(next(c['reset'] for c in platform['csrs'] if int(c['address'],0) == int(k,0)),0))
+                for k,v in settings['spike_identity_reads'].items()}
+    mstatus = int(next(c['reset'] for c in platform['csrs'] if c['name'] == 'mstatus'),0)
+    text = spike_sail_trace(log,memory_bytes,len(prefix),substitutions,identity,mstatus)
+    (out/f'{seed}_spike.trace').write_text(text)
+    events = relocate(parse_sail_log(text),bias,size)
+    end = next(n for n,e in enumerate(events) if e['pc_before'] == end_pc-bias)
+    return events[:end+1], out/f'spike_{seed}.log'
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--sail', type=Path, default=SAIL)
+    parser.add_argument('--spike', type=Path, default=ROOT/'../riscv-isa-sim/build/spike')
+    parser.add_argument('--reference', choices=('sail','spike'), default='sail')
     parser.add_argument('--dut', choices=('single_lane','fetched'), default='single_lane')
     args = parser.parse_args()
     fetched = args.dut == 'fetched'
+    on_spike = args.reference == 'spike'
+    if on_spike and not fetched: parser.error('the Spike differential runs on the fetched core')
+    label = 'Spike' if on_spike else 'Sail'
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
-    sail = args.sail.resolve()
-    lock,_ = check_harness(); check_sail(sail,lock)
-    settings = json.loads((ROOT/('config/fetched_differential.json' if fetched else 'config/sail_differential.json')).read_text())
-    if digest(sail) != settings['sail_binary_sha256']: raise ValueError('Sail binary pin differs')
-    if settings['sail_override']['platform']['instructions_per_tick'] <= settings['instruction_limit']+1:
-        raise ValueError('Sail timer tick interval must exceed the run limit')
+    lock,_ = check_harness()
+    if on_spike:
+        reference = args.spike.resolve(); verify_spike(reference)
+        settings = json.loads((ROOT/'config/spike_differential.json').read_text())
+    else:
+        reference = sail = args.sail.resolve(); check_sail(sail,lock)
+        settings = json.loads((ROOT/('config/fetched_differential.json' if fetched else 'config/sail_differential.json')).read_text())
+        if digest(sail) != settings['sail_binary_sha256']: raise ValueError('Sail binary pin differs')
+        if settings['sail_override']['platform']['instructions_per_tick'] <= settings['instruction_limit']+1:
+            raise ValueError('Sail timer tick interval must exceed the run limit')
     config = json.loads((ROOT/('config/memory_core.json' if fetched else 'config/single_lane.json')).read_text())
     versions = {}
     toolchain = json.loads((ROOT/'config/toolchain.lock').read_text())
@@ -143,17 +224,18 @@ def main():
         'verif/core/differential_programs.py','verif/core/programs.py','verif/core/reference.py','verif/core/single_lane_tb.cpp',
         'verif/lockstep/comparator.py','verif/lockstep/generated/commit_event.py','verif/protocol/generated/memory_protocol.py',
         'sw/link/platform.ld','tests/test_sail_log.py']
+    if on_spike: paths += ['config/spike_differential.json','model/iss/spike_log.py','tools/run_lockstep_smoke.py','config/references.lock']
     if fetched:
         paths += ['config/fetched_differential.json','config/memory_core.json',config['lint_config'],
                   'verif/core/fetched_core_tb.cpp','verif/unit/packed_bits.hpp']
     paths += [str(p.relative_to(ROOT)) for p in sorted((ROOT/lock['harness']['directory']).iterdir()) if p.is_file()]
     inputs = {p:digest(ROOT/p) for p in sorted(set(paths))}
-    fingerprint = {'inputs':inputs,'sail_sha256':digest(sail),'versions':versions}
+    fingerprint = {'inputs':inputs,f'{args.reference}_sha256':digest(reference),'versions':versions}
     run_hash = hashlib.sha256(json.dumps(fingerprint,sort_keys=True).encode()).hexdigest()[:16]
-    out = ROOT/('out/sail_fetched_differential' if fetched else 'out/sail_differential')/run_hash
+    out = ROOT/('out/spike_fetched_differential' if on_spike else 'out/sail_fetched_differential' if fetched else 'out/sail_differential')/run_hash
     out.mkdir(parents=True,exist_ok=True)
     receipt = out/'receipt.json'; receipt.unlink(missing_ok=True)
-    override = out/'override.json'; override.write_text(json.dumps(settings['sail_override'])+'\n')
+    if not on_spike: override = out/'override.json'; override.write_text(json.dumps(settings['sail_override'])+'\n')
     def run(command,log,failure=None):
         result = subprocess.run([str(c) for c in command],cwd=ROOT,text=True,stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,timeout=600)
@@ -176,17 +258,20 @@ def main():
         elf = out/f'{seed}.elf'
         run(['riscv64-unknown-elf-gcc','-march=rv32i','-mabi=ilp32','-nostdlib','-nostartfiles',
              '-Wl,--no-relax,--build-id=none','-T','sw/link/platform.ld',assembly,'-o',elf],f'compile_{seed}.log')
-        trace = out/f'{seed}.trace'
-        run([sail,'--config',ROOT/'verif/arch/act4/sail.json','--config-override',override,
-             '--trace-instr','--trace-reg','--trace-mem','--trace-exception','--trace-step',
-             '--trace-output',trace,'--inst-limit',settings['instruction_limit']+1,elf],f'sail_{seed}.log')
-        expected = parse_sail_log(trace.read_text())
-        if len(expected) != settings['instruction_limit']: raise ValueError('Sail trace is incomplete')
+        if on_spike:
+            expected,trace = spike_reference(reference,settings,seed,out,run)
+        else:
+            trace = out/f'{seed}.trace'
+            run([sail,'--config',ROOT/'verif/arch/act4/sail.json','--config-override',override,
+                 '--trace-instr','--trace-reg','--trace-mem','--trace-exception','--trace-step',
+                 '--trace-output',trace,'--inst-limit',settings['instruction_limit']+1,elf],f'sail_{seed}.log')
+            expected = parse_sail_log(trace.read_text())
+            if len(expected) != settings['instruction_limit']: raise ValueError('Sail trace is incomplete')
+            end = next((n for n,e in enumerate(expected) if e['pc_before'] == end_pc),None)
+            if end is None: raise ValueError('Sail did not reach program end')
+            expected = expected[:end+1]
         if [(e['pc_before'],e['instruction']) for e in expected[:len(boot)]] != [(4*n,ins) for n,ins in enumerate(boot)]:
-            raise ValueError('Sail initialization sequence differs')
-        end = next((n for n,e in enumerate(expected) if e['pc_before'] == end_pc),None)
-        if end is None: raise ValueError('Sail did not reach program end')
-        expected = expected[:end+1]
+            raise ValueError(f'{label} initialization sequence differs')
         covered = coverage(expected[len(boot):])
         references[seed] = (raw,image,boot,expected)
         modes = ['normal'] + (settings['extra_modes'] if seed == 42 else [])
@@ -197,16 +282,16 @@ def main():
             count = compare_output(output,expected,boot)
             witnesses = fetched_coverage(expected,output) if fetched else {}
             results.append(dict(seed=seed,mode=mode,compared_events=count,coverage={**covered,**witnesses},elf_sha256=digest(elf),
-                                sail_trace_sha256=digest(trace),rtl_log_sha256=digest(out/log),
+                                **{f'{args.reference}_trace_sha256':digest(trace)},rtl_log_sha256=digest(out/log),
                                 bootstrap_events_per_reset=len(boot)))
-            print(f'Sail differential {args.dut} seed={seed} {mode}: PASS ({count} events)',flush=True)
+            print(f'{label} differential {args.dut} seed={seed} {mode}: PASS ({count} events)',flush=True)
     raw,image,boot,expected = references[42]
     mutations = []
     if fetched:
         output = (out/'core_42_normal.log').read_text()
         actual = [unpack_event(line.split()[3:]) for line in output.splitlines() if line.startswith('EVENT ')]
         mutations = comparator_mutations(expected, actual)
-        print(f'Sail comparator mutations: PASS ({len(mutations)} detected)',flush=True)
+        print(f'{label} comparator mutations: PASS ({len(mutations)} detected)',flush=True)
         negatives = []
         for mode,marker in (('fatal','platform fatal'),('hold_drain','final memory transaction did not drain')):
             run([binary,raw,42,len(expected),mode],f'negative_{mode}.log',failure=marker)
@@ -214,7 +299,7 @@ def main():
         try: compare_output(run([binary,raw,42,len(expected)-1,'normal'],'negative_short.log'),expected,boot)
         except ValueError: negatives.append('short_trace')
         else: raise RuntimeError('short fetched trace was accepted')
-        print(f'Sail fetched negatives: PASS ({", ".join(negatives)})',flush=True)
+        print(f'{label} fetched negatives: PASS ({", ".join(negatives)})',flush=True)
         mutations += negatives
     for name,file,old,new in ([
         ('fence_i_no_redirect','rtl/core/head_system_controller.sv','decoded.op inside {OP_MRET, OP_FENCE_I};','decoded.op == OP_MRET;'),
@@ -238,11 +323,11 @@ def main():
         output = run([mutant,raw,42,len(expected),'normal'],name+'.log')
         try: compare_output(output,expected,boot)
         except ComparisonError: mutations.append(name)
-        else: raise RuntimeError(f'Sail comparison missed {name} RTL mutation')
-        print(f'Sail RTL mutation {name}: PASS (detected)',flush=True)
+        else: raise RuntimeError(f'{label} comparison missed {name} RTL mutation')
+        print(f'{label} RTL mutation {name}: PASS (detected)',flush=True)
     if any(digest(ROOT/p) != h for p,h in inputs.items()): raise ValueError('inputs changed during differential run')
     receipt.write_text(json.dumps({**fingerprint,'schema':1,'profile':settings['profile'],'runs':results,
-        'core_binary_sha256':digest(binary),'sail_override':settings['sail_override'],
+        'core_binary_sha256':digest(binary),**({} if on_spike else {'sail_override':settings['sail_override']}),
         'mutations_detected':mutations,'limitations':settings['limitations'],
         ('two_wide_core_accepted' if fetched else 'architectural_slice_accepted'):False},indent=2)+'\n')
     print(f'Receipt: {receipt.relative_to(ROOT)}')
