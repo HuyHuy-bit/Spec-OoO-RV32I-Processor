@@ -49,5 +49,6 @@ anything else yet, since there are no caches.
 
 ## Diagram source
 
-[`core.drawio`](diagrams/core.drawio): export page 1 to `rtl-overview.svg` and
-page 2 to `head-memory-controller.svg`.
+[`core.drawio`](diagrams/core.drawio): export page 1 to `rtl-overview.svg`,
+page 2 to `head-memory-controller.svg` and page 3 to
+`simplified-architecture.svg` (README overview).

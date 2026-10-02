@@ -15,20 +15,9 @@ behind it. An out-of-order core runs whatever is ready. Three ideas keep that co
 - In-order retirement: a reorder buffer (ROB) commits results in program order,
   so traps and memory writes look sequential.
 
-```mermaid
-flowchart LR
-    F[Fetch + decode] --> R[Rename]
-    R --> IQ[Issue queue]
-    R --> ROB[Reorder buffer]
-    IQ --> EX[Execute<br/>2 integer ports]
-    EX <--> PRF[(Physical<br/>registers)]
-    EX --> ROB
-    ROB --> HEAD[Memory + CSR<br/>at ROB head]
-    EX -. mispredict .-> F
-    HEAD -. trap .-> F
-```
+![Simplified architecture](docs/diagrams/simplified-architecture.svg)
 
-Dotted arrows redirect fetch. Module-level detail is in
+Dashed arrows redirect fetch. Module-level detail is in
 [architecture](docs/architecture.md).
 
 | Idea | Size here | Source |

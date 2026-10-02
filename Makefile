@@ -8,7 +8,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: a1-timing-fetch a1-timing-check
 .PHONY: a1-check
 .PHONY: single-lane-check single-lane-synth-check
-.PHONY: act4-tools act4-core-check
+.PHONY: act4-tools act4-core-check act4-fetched-check
 .PHONY: sail-log-check sail-differential-check sail-fetched-differential-check
 .PHONY: architectural-slice-check architectural-slice-evidence-check architectural-slice-checker-test
 .PHONY: assert-portability
@@ -189,6 +189,9 @@ act4-tools:
 
 act4-core-check:
 	@python3 tools/run_act4_core.py --checkout "$(ACT4_CHECKOUT)" --sail "$(ACT4_SAIL)"
+
+act4-fetched-check:
+	@python3 tools/run_act4_core.py --dut fetched --checkout "$(ACT4_CHECKOUT)" --sail "$(ACT4_SAIL)"
 
 act4-upstream-check:
 	@python3 tools/check_act4.py --checkout "$(ACT4_CHECKOUT)" --sail "$(ACT4_SAIL)"

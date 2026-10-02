@@ -21,5 +21,6 @@ make system-core-check
 | `make memory-core-check` | Adds loads, stores, FENCE and FENCE.I |
 | `make head-memory-check` | Memory controller alone |
 | `make sail-fetched-differential-check` | Real programs compared with Sail event by event. A small corpus, not ACT4 |
+| `make act4-fetched-check` | 39 selected ACT4 tests (RV32I, Zicsr, FENCE.I) on the memory core. Not ISA certification |
 
 Per-block gates are `make <block>-check`; see the [Makefile](../Makefile).

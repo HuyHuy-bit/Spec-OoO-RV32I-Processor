@@ -1,4 +1,5 @@
 // Runs a raw program image on the fetched memory core and prints accepted architectural events.
+// With a tohost address (ACT4), the run ends at tohost == 1 after every write drains; the count is a limit.
 #include "Vfetch_execution_core.h"
 #include "verilated.h"
 #include "fields.hpp"
@@ -41,6 +42,9 @@ int main(int argc,char** argv) {
         const unsigned target=std::stoul(argv[3]);
         const std::string mode=argv[4];
         const bool stall=mode=="stall" || mode=="hold_drain";
+        const bool act4=argc>5 && argv[5][0]!='+';
+        const unsigned tohost=act4 ? std::stoul(argv[5],nullptr,0):0;
+        require(!act4 || (!(tohost&7) && tohost<=65528),"invalid tohost address");
         // The infallible RAM target is the explicit admission guarantor for cached stores.
         auto memory=image;
         std::array<uint8_t,48> mmio{};
@@ -49,6 +53,7 @@ int main(int argc,char** argv) {
         std::array<uint32_t,REQUEST_WORDS> held_i{}, held_d{};
         bool hold_i=false, hold_d=false, reset_done=false;
         unsigned events=0, dual=0;
+        bool halted=false, tohost_retired=false;
         // Ownership monitors: cached writes follow their retirement; MMIO traffic precedes it.
         std::deque<Write> cached_writes, mmio_writes;
         std::deque<unsigned> mmio_reads;
@@ -62,7 +67,7 @@ int main(int argc,char** argv) {
         auto reset=[&] {
             instruction={}; data={}; memory=image; mmio.fill(0);
             cached_writes.clear(); mmio_writes.clear(); mmio_reads.clear();
-            hold_i=hold_d=false; events=0;
+            hold_i=hold_d=false; events=0; halted=tohost_retired=false;
             dut.rst_i=1; dut.response_valid_i=0; dut.data_response_valid_i=0;
             for (int n=0;n<3;++n) { dut.clk_i=0; dut.eval(); dut.clk_i=1; dut.eval(); }
             dut.rst_i=0;
@@ -112,6 +117,10 @@ int main(int argc,char** argv) {
                 const unsigned base=tx.uncached ? tx.address&~3u:tx.address;
                 for (unsigned lane=0;lane<(tx.uncached ? 4u:32u);++lane)
                     if ((tx.mask>>lane)&1) byte(base+lane)=uint8_t(tx.words[lane/4]>>(8*(lane%4)));
+                uint64_t status=0;
+                for (unsigned lane=0;act4 && lane<8;++lane) status|=uint64_t(memory[tohost+lane])<<(8*lane);
+                require(!status || status==1,"ACT4 FAIL tohost="+std::to_string(status));
+                halted|=status==1;
             }
             tx.pending=false;
         };
@@ -119,6 +128,7 @@ int main(int argc,char** argv) {
             std::array<uint32_t,SLOT_WORDS> slot{};
             for (unsigned n=0;n<SLOT_WORDS;++n) slot[n]=get32(bus,offset+32*n,std::min(32u,EVENT_BITS-32*n));
             const unsigned address=get32(slot,EV_MEM_ADDRESS,32), write=get32(slot,EV_MEM_WRITE_MASK,4);
+            tohost_retired|=act4 && write && address>=tohost && address<tohost+8;
             if (write && address<0x10000000) cached_writes.push_back({address,write,get32(slot,EV_MEM_WRITE_DATA,32)});
             else if (write) {
                 require(!mmio_writes.empty() && mmio_writes.front().address==(address&~3u) && mmio_writes.front().mask==write
@@ -128,9 +138,11 @@ int main(int argc,char** argv) {
                 require(!mmio_reads.empty() && mmio_reads.front()==address,"MMIO load retired without its device read");
                 mmio_reads.pop_front();
             }
-            std::cout<<"EVENT 0 0";
-            for (unsigned n=0;n<SLOT_WORDS;++n) std::cout<<' '<<std::hex<<slot[n];
-            std::cout<<std::dec<<'\n';
+            if (!act4) {
+                std::cout<<"EVENT 0 0";
+                for (unsigned n=0;n<SLOT_WORDS;++n) std::cout<<' '<<std::hex<<slot[n];
+                std::cout<<std::dec<<'\n';
+            }
             ++events;
         };
         auto hold=[&](const auto& bus,auto& snapshot,bool& held,bool valid,bool accepted) {
@@ -145,13 +157,15 @@ int main(int argc,char** argv) {
         reset();
         unsigned settled=0;
         for (unsigned cycle=0;cycle<target*200+5000;++cycle) {
-            const bool done=events>=target;
+            require(!act4 || halted || events<target,tohost_retired ? "ACT4 tohost store did not drain"
+                    :"ACT4 instruction limit without tohost completion");
+            const bool done=act4 ? halted:events>=target;
             dut.clk_i=0;
             dut.memory_issue_allowed_i=ready();
             dut.request_ready_i=ready();
-            dut.data_request_ready_i=mode=="hold_drain" && events+1>=target ? 0:ready();
+            dut.data_request_ready_i=mode=="hold_drain" && (act4 ? tohost_retired:events+1>=target) ? 0:ready();
             dut.execution_ready_i=random()%4; dut.completion_enable_i=random()%4;
-            dut.retire_ready_i=done ? 0:events+1==target ? random()%2:random()%4;
+            dut.retire_ready_i=done ? 0:!act4 && events+1==target ? random()%2:random()%4;
             dut.trap_ready_i=!done && random()%3!=0;
             dut.resolve_grant_i=random()%3!=0;
             respond(instruction,dut.response_i);
@@ -180,16 +194,18 @@ int main(int argc,char** argv) {
             if (dut.data_request_valid_o && dut.data_request_ready_i) accept(data,dut.data_request_o,true);
             dut.clk_i=1; dut.eval();
             require(!dut.fatal_o,"platform fatal");
-            require(events<=target,"retired past the event limit");
+            require(act4 || events<=target,"retired past the event limit");
             // Completion: every architectural write has drained and no MMIO traffic is unretired.
-            if (done && !dut.memory_busy_o && !data.pending && cached_writes.empty() && mmio_writes.empty() && mmio_reads.empty()) {
+            // ACT4 withholds retirement inside the halt loop, whose next store legitimately holds the memory path.
+            if (done && (act4 || !dut.memory_busy_o) && !data.pending && cached_writes.empty() && mmio_writes.empty() && mmio_reads.empty()) {
                 if (++settled<4) continue;
                 require(mode.rfind("reset_",0)!=0 || reset_done,"reset scenario did not fire");
-                std::cout<<"CORE PASS events="<<events<<" cycles="<<cycle+1<<" dual="<<dual<<'\n';
+                std::cout<<(act4 ? "ACT4 PASS events=":"CORE PASS events=")<<events<<" cycles="<<cycle+1<<" dual="<<dual<<'\n';
                 return 0;
             }
             settled=0;
         }
+        if (act4) throw std::runtime_error(tohost_retired ? "ACT4 tohost store did not drain":"watchdog expired");
         throw std::runtime_error(events>=target ? "final memory transaction did not drain":"watchdog expired");
     } catch (const std::exception& error) { std::cerr<<"FETCHED CORE FAIL "<<error.what()<<'\n'; return 1; }
 }
