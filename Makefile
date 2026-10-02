@@ -28,6 +28,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: rename-bundle-check
 .PHONY: rename-state-check rename-checkpoints-check rename-recovery-check
 .PHONY: formal-readiness-check formal-readiness-evidence-check formal-readiness-checker-test
+.PHONY: occupancy-check occupancy-sweep
 
 doctor:
 	@python3 tools/doctor.py --lock config/toolchain.lock --profile "$(PROFILE)"
@@ -224,6 +225,12 @@ a1-check:
 single-lane-check:
 	@python3 tools/run_single_lane.py
 
+occupancy-check:
+	@python3 -m unittest -v tests/test_occupancy_model.py
+
+occupancy-sweep:
+	@python3 -m model.occupancy
+
 sail-log-check:
 	@python3 -m unittest -v tests/test_sail_log.py
 
@@ -236,7 +243,7 @@ sail-fetched-differential-check:
 single-lane-synth-check:
 	@python3 tools/run_single_lane.py --synth --mutations --suite "$(OSS_CAD_SUITE)"
 
-check-fast: unit-runner-check platform-check event-check memory-check lockstep-check act4-check prf-check a1-probe-check single-lane-check sail-log-check architectural-slice-checker-test
+check-fast: unit-runner-check platform-check event-check memory-check lockstep-check act4-check prf-check a1-probe-check single-lane-check sail-log-check occupancy-check architectural-slice-checker-test
 	@python3 tools/check_s0.py
 	@git diff --check
 

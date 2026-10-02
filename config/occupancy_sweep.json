@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "profile": "c0_memory_occupancy_sweep",
+  "purpose": "Pre-RTL LQ / D$ miss-slot sizing study (foundation plan 3.1). Model results, not RTL measurements, core IPC claims or MLP of the current core.",
+  "seed": 20261001,
+  "instructions": 3000,
+  "warmup": 300,
+  "machine": {
+    "rob": 32,
+    "sq": 8,
+    "width": 2,
+    "hit_latency": 2,
+    "completion_buffer": 2
+  },
+  "sweep": {
+    "lq": [8, 16],
+    "mshr": [1, 2, 4, 8],
+    "credits": [1, 4, 8],
+    "miss_latency": [20, 100]
+  },
+  "workloads": {
+    "serial_chain": {"load_density": 0.3, "miss_rate": 0.3, "chains": 1},
+    "four_chains": {"load_density": 0.3, "miss_rate": 0.3, "chains": 4},
+    "independent": {"load_density": 0.3, "miss_rate": 0.3, "chains": 0},
+    "independent_dense": {"load_density": 0.5, "miss_rate": 0.5, "chains": 0},
+    "independent_stores": {"load_density": 0.3, "store_density": 0.15, "miss_rate": 0.3, "chains": 0}
+  },
+  "assumptions": [
+    "Two-wide dispatch/writeback/retire, 32-entry ROB, one AGU launch per cycle (architecture contract D2).",
+    "MSHR1 is the blocking baseline cache: no hit launches while a miss is outstanding. MSHR>1 allows hits under misses.",
+    "Each miss is a distinct line: no merging. Responses return in ready-cycle order with fixed latency per point.",
+    "Target credits cap live miss requests independently of MSHRs; the current memory protocol has one.",
+    "LQ entries are held from dispatch to retirement; SQ entries from dispatch to retirement. Committed-store drain bandwidth is not modeled.",
+    "Stores are address-ready at dispatch and launch oldest-first, so no load passes an unknown older store; no forwarding or speculation.",
+    "ALU ops are independent single-cycle producers that compete for the two writeback slots, oldest first, with load results.",
+    "A ready miss without an MSHR or credit holds the AGU for that cycle (replay); dependent loads wait for producer writeback."
+  ]
+}
