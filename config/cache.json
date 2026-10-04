@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "profile": "blocking_l1_cache_reference_v0",
+  "purpose": "Transaction-level reference for the blocking L1 caches: architectural data, hit/miss classification, replacement and downstream line traffic. It has no timing, races or pipeline state; RTL scoreboards compare its outcomes, not its cycles.",
+  "geometry_status": "provisional until the storage-feasibility pilot and geometry ADR",
+  "caches": {
+    "dcache": {"size_bytes": 4096, "ways": 2, "line_bytes": 32, "writable": true},
+    "icache": {"size_bytes": 4096, "ways": 2, "line_bytes": 32, "writable": false}
+  },
+  "semantics": {
+    "write_policy": "write_back",
+    "write_miss": "allocate",
+    "replacement": "lru",
+    "victim_choice": "lowest_invalid_way_else_lru",
+    "replacement_update": "every_hit_and_fill",
+    "miss_order": "victim_writeback_before_fill",
+    "fill_error": "victim_already_evicted_line_not_installed",
+    "writeback_error": "fatal",
+    "alignment": "natural_required",
+    "unwritten_memory": "zero"
+  },
+  "semantics_rule": "The semantics values are binding and validated by model/cache.py. A different value is a different contract and must change the model and its tests.",
+  "access_rule": "Accesses are 1, 2 or 4 bytes, naturally aligned, so none crosses a line. Misalignment and uncached/MMIO classification are trapped or routed before the cache. A store miss fills before writing; a fill error is reported to the access and nothing is written. Committed-store admission must complete that fill before retirement (config/committed_store.json).",
+  "permission_rule": "writable is a required boolean. configured() builds the cache with it, so a store to the read-only I$ fails.",
+  "flush_rule": "flush() writes back every dirty line in set then way order and invalidates nothing; it is the end-of-test and D-side clean reference, not a FENCE.I policy decision."
+}
