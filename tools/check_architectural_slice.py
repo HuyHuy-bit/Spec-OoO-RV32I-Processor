@@ -119,7 +119,7 @@ def evaluate(manifest, read):
     wanted = {(str(Path(t).with_suffix('.elf')), seed) for t in selected for seed in contract['seeds']}
     require(len(act['runs']) == len(wanted) and {(r['test'], r['seed']) for r in act['runs']} == wanted, 'missing ACT4 test/seed')
     for run in act['runs']:
-        log = read(f"{prefix}/{Path(run['test']).stem}_{run['seed']}.log").decode()
+        log = read(f"{prefix}/{Path(run['test']).stem}_{run['mode']}_{run['seed']}.log").decode()
         require(0 < run['events'] <= act_config['instruction_limit'] and run['cycles'] > 0, 'invalid ACT4 budget')
         require(f"ACT4 PASS events={run['events']} cycles={run['cycles']}" in log, 'ACT4 completion mismatch')
         require(sha(read(f"{prefix}/work/spec_ooo_rv32i/elfs/{run['test']}")) == run['elf_sha256'], 'ACT4 ELF mismatch')
@@ -138,10 +138,10 @@ def evaluate(manifest, read):
     for run in sail['runs']:
         require(run['coverage'] == contract['coverage'], 'missing architectural coverage')
         require(contract['minimum_sail_events_per_run'] <= run['compared_events'] < 2*sail_config['instruction_limit'], 'short or inflated Sail comparison')
-        require(run['bootstrap_events_per_reset'] == 6, 'comparison boundary differs')
+        require(run['bootstrap_events_per_reset'] == 7, 'comparison boundary differs')
         for path, field in [(f"{run['seed']}.elf", 'elf_sha256'), (f"{run['seed']}.trace", 'sail_trace_sha256'), (f"core_{run['seed']}_{run['mode']}.log", 'rtl_log_sha256')]:
             require(sha(read(f'{prefix}/{path}')) == run[field], 'Sail artifact mismatch')
-        marker = f"Sail differential seed={run['seed']} {run['mode']}: PASS ({run['compared_events']} events)"
+        marker = f"Sail differential single_lane seed={run['seed']} {run['mode']}: PASS ({run['compared_events']} events)"
         require(marker in sail_step, 'missing Sail comparison outcome')
     require(set(sail['mutations_detected']) == {'load_sign', 'trap_value'}, 'missing Sail mutations')
     for name in sail['mutations_detected']:

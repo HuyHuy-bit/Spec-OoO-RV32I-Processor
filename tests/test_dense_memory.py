@@ -1,8 +1,9 @@
+import copy
 import json
 from pathlib import Path
 import unittest
 
-from model.dense_memory import CONTRACT, DenseMemory, DenseMemoryError, Shape, defined, lanes
+from model.dense_memory import CONTRACT, DenseMemory, DenseMemoryError, Shape, check_contract, defined, lanes
 
 ROOT = Path(__file__).resolve().parents[1]
 WORD = Shape(256, 32)
@@ -21,6 +22,22 @@ class DenseMemoryTest(unittest.TestCase):
         for item in ("legal_shapes", "throughput", "output_hold", "polarity", "byte_granularity", "collision",
                      "reset", "unknown_data", "enable_low", "write_mask"):
             self.assertIn(item, contract)
+
+    def test_contradictory_or_unsupported_contract_fails(self):
+        changes = [
+            (lambda c: c["semantics"].update(reset_payload="cleared"), "semantics.reset_payload"),
+            (lambda c: c["semantics"].update(output_hold="until_next_read"), "semantics.output_hold"),
+            (lambda c: c["semantics"].pop("collision"), "semantics.collision"),
+            (lambda c: c["semantics"].update(read_during_write="old_data"), "semantics.read_during_write"),
+            (lambda c: c.pop("semantics"), "semantics"),
+            (lambda c: c.update(port="2rw"), "contract.port"),
+            (lambda c: c.update(read_latency=0), "contract.read_latency"),
+        ]
+        for change, rule in changes:
+            contract = copy.deepcopy(CONTRACT)
+            change(contract)
+            with self.subTest(rule=rule), self.assertRaisesRegex(DenseMemoryError, rule):
+                check_contract(contract)
 
     def test_read_latency_and_output_validity(self):
         # Each call is one edge; its result is the output in the following cycle.
@@ -77,6 +94,22 @@ class DenseMemoryTest(unittest.TestCase):
                               ((True, False, None), "address_range"), ((True, True, 0, 1, 0x10), "mask_width"),
                               ((True, True, 0, 1 << 32, 0xf), "data_width"), ((True, True, 0, (1, 2), 0xf), "data_width")):
             with self.assertRaisesRegex(DenseMemoryError, rule): m.cycle(*request)
+
+    def test_rejects_out_of_width_lanes_without_changing_contents(self):
+        tag = Shape(64, 21, masked=False)
+        cases = [(Shape(16, 8), 0x5a, [(256,), (-1,), ("not data",), (True,), (1.0,)]),
+                 (WORD, 0x11223344, [(1, 2, 3, 256), (None, None, None, -1), "0x1", 1.5]),
+                 (tag, 0x1abcd, [(1 << 21,), (-1,), ("x",)])]
+        for shape, value, bad in cases:
+            m = DenseMemory(shape)
+            m.cycle(True, True, 0, value, (1 << shape.lanes) - 1)
+            for data in bad:
+                with self.subTest(shape=shape, data=data), self.assertRaisesRegex(DenseMemoryError, "data_width"):
+                    m.cycle(True, True, 0, data, (1 << shape.lanes) - 1)
+            self.assertEqual(m.cycle(True, False, 0), lanes(shape, value))
+        m = DenseMemory(Shape(16, 8))
+        m.cycle(True, True, 1, (None,), 1)
+        self.assertEqual(m.cycle(True, False, 1), (None,))
 
 
 if __name__ == "__main__":

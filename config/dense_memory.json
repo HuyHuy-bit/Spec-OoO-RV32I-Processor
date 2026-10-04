@@ -6,6 +6,19 @@
   "read_latency": 1,
   "accesses_per_cycle": 1,
   "byte_granularity": 8,
+  "semantics": {
+    "output_hold": "read_cycle_only",
+    "polarity": "active_high",
+    "enable_low": "inputs_ignored",
+    "zero_mask_write": "no_op_uses_port",
+    "collision": "next_cycle_read_sees_write",
+    "reset_payload": "retained",
+    "reset_output": "unknown",
+    "reset_in_flight_reads": "dropped",
+    "unwritten_data": "unknown",
+    "illegal_request": "error"
+  },
+  "semantics_rule": "The semantics values are binding and validated by model/dense_memory.py; the prose fields below explain them. A different value is a different contract and must change the model and its tests.",
   "legal_shapes": {
     "depth_min": 16,
     "depth_max": 1024,

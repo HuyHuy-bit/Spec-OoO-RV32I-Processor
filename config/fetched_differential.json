@@ -7,6 +7,7 @@
     42,
     20260906
   ],
+  "long_run": {"seed": 7, "repeat": 12, "instruction_limit": 20000},
   "extra_modes": [
     "stall",
     "reset_fetch",
@@ -28,7 +29,7 @@
     "The timer tick interval exceeds each run so Sail does not raise CLINT interrupts in the interrupt-disabled profile.",
     "Transport fault injection remains in memory-core-check; this differential exercises architectural PMA faults.",
     "Self-modifying code is covered only where FENCE.I orders it.",
-    "This is not ACT4 acceptance, Spike differential, full ISA coverage, formal proof or two-wide phase closure."
+    "This does not establish ACT4 acceptance, Spike differential, full ISA coverage, formal proof or full two-wide core acceptance."
   ],
   "sail_binary_sha256": "46a321045d6ac14190c05c68504b8aaf9dd80756e44e82e37f5aff5543ab4a34"
 }

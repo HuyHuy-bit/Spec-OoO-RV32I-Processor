@@ -25,7 +25,7 @@
   "limitations": [
     "One active instruction and one retirement lane; 64x32 PRF and 32-entry ROB. No speculative or two-wide execution, caches, interrupts, board validation, or physical closure.",
     "Selected ACT4 coverage only. The unmodified BEQ signature ELF exceeds the 64 KiB BRAM; all six branch forms are covered by directed tests and Sail differential.",
-    "Sail compares shared platform behavior after a checked six-instruction initialization. Fixed misa/mie/mip writes and machine counters use dedicated RTL/interpreter checks because Sail 0.10 differs.",
-    "Transport faults use local protocol checks; Sail differential covers architectural PMA faults. PHY0 and later tier gates remain open."
+    "Sail compares shared platform behavior after a checked seven-instruction initialization. Fixed misa/mie/mip writes and machine counters use dedicated RTL/interpreter checks because Sail 0.10 differs.",
+    "Transport faults use local protocol checks; Sail differential covers architectural PMA faults. This profile does not establish physical readiness or full two-wide core acceptance."
   ]
 }

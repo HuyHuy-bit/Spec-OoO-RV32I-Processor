@@ -5,7 +5,7 @@ import struct
 from verif.core.programs import i, r, store, branch, jal, csr, constant
 
 
-def program(seed, self_modifying=False, base=0):
+def program(seed, self_modifying=False, base=0, repeat=1):
     """Build one image; base relocates every BRAM address so Spike can run it above its debug module."""
     boot = [*constant(31,base+0x100), csr(0,31,0x305,1), *constant(31,0x1800), csr(0,31,0x300,1)]
     boot += [jal(0,0x400-4*len(boot))]
@@ -54,6 +54,7 @@ def program(seed, self_modifying=False, base=0):
     # Random operands must not hold code addresses, so a relocated reference computes the same data.
     words += constant(28,base+0x8000)+[i(1,0,0x123),i(7,0,-0x77)]
     rng = random.Random(seed)
+    if repeat > 1: words += [i(26,0,repeat)]; top = len(words)
     for _ in range(600):
         rd,a,b = (rng.randrange(1,26),rng.randrange(26),rng.randrange(26))
         choice = rng.randrange(3)
@@ -65,6 +66,9 @@ def program(seed, self_modifying=False, base=0):
             words += [store(28,a,offset,size), i(rd,28,offset,size+4 if size<2 and rng.randrange(2) else size,3)]
         else:
             words += [branch(a,b,8,rng.choice((0,1,4,5,6,7))), i(rd,rd,1)]
+    if repeat > 1:
+        # Repeat until ROB identities require recycling.
+        n = len(words); words += [i(26,26,-1), branch(26,0,8,0), jal(0,4*(top-(n+2)))]
     # A final store makes completion depend on draining a committed write.
     if self_modifying: words += [store(28,27,4,2)]
     words += [branch(0,0,0)]

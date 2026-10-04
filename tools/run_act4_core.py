@@ -143,7 +143,7 @@ def main():
                 log = f'{Path(name).stem}_{mode}_{seed}.log'
                 output = run([*driver(imagefile, seed, selection['instruction_limit'], symbols['tohost'], mode),
                               '+verilator+rand+reset+2', f'+verilator+seed+{seed}'], log)
-                match = re.search(r'^ACT4 PASS events=(\d+) cycles=(\d+)( dual=\d+)?$', output, re.MULTILINE)
+                match = re.search(r'^ACT4 PASS events=(\d+) cycles=(\d+)( dual=\d+ recycles=\d+)?$', output, re.MULTILINE)
                 if not match: raise RuntimeError(f'ACT4 did not complete: {name} {mode} seed {seed}')
                 results.append({'test': name, 'mode': mode, 'seed': seed, 'elf_sha256': digest(elf),
                                 'events': int(match[1]), 'cycles': int(match[2])})

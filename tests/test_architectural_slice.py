@@ -46,8 +46,8 @@ def fixture():
         act['upstream'][test] = sha(b'upstream test')
         files['out/act/work/spec_ooo_rv32i/elfs/'+elf] = b'ELF'
         for seed in contract['seeds']:
-            act['runs'].append(dict(test=elf, seed=seed, events=100, cycles=1500, elf_sha256=sha(b'ELF')))
-            files[f'out/act/{Path(test).stem}_{seed}.log'] = b'ACT4 PASS events=100 cycles=1500'
+            act['runs'].append(dict(test=elf, mode='act4', seed=seed, events=100, cycles=1500, elf_sha256=sha(b'ELF')))
+            files[f'out/act/{Path(test).stem}_act4_{seed}.log'] = b'ACT4 PASS events=100 cycles=1500'
     for name in act['negative_checks']:
         files[f'out/act/{name}.log'] = b'ACT4 instruction limit without tohost completion' if name == 'timeout' else b'ACT4 FAIL tohost=3'
     sail = dict(schema=1, inputs=inputs, architectural_slice_accepted=False, sail_sha256=act['sail_sha256'],
@@ -58,10 +58,10 @@ def fixture():
         for mode in ['normal']+(['reset_fetch', 'reset_data', 'reset_commit', 'stall_store'] if seed == 42 else []):
             for path in (f'{seed}.elf', f'{seed}.trace', f'core_{seed}_{mode}.log'):
                 files['out/sail/'+path] = b'artifact'
-            sail['runs'].append(dict(seed=seed, mode=mode, compared_events=1200, bootstrap_events_per_reset=6,
+            sail['runs'].append(dict(seed=seed, mode=mode, compared_events=1200, bootstrap_events_per_reset=7,
                                     coverage=contract['coverage'], elf_sha256=sha(b'artifact'),
                                     sail_trace_sha256=sha(b'artifact'), rtl_log_sha256=sha(b'artifact')))
-            sail_log += f'Sail differential seed={seed} {mode}: PASS (1200 events)\n'
+            sail_log += f'Sail differential single_lane seed={seed} {mode}: PASS (1200 events)\n'
     for name in sail['mutations_detected']:
         files[f'out/sail/{name}.log'] = b'mutation trace'
         sail_log += f'Sail RTL mutation {name}: PASS (detected)\n'

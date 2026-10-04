@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "profile": "two_wide_ooo_conservative_memory",
+  "claim_class": "simulation_and_bounded_formal",
+  "command_timeout_seconds": 3600,
+  "commands": [
+    "architectural-slice-check",
+    "rename-bundle-check", "rename-state-check", "rename-checkpoints-check", "rename-recovery-check",
+    "rob-two-wide-check", "backend-two-wide-check", "issue-queue-check", "issue-backend-check",
+    "integer-backend-check", "control-flow-backend-check", "fetch-two-wide-check", "fetch-execution-core-check",
+    "frontend-faults-check", "csr-two-wide-check", "head-trap-core-check", "serial-retirement-check",
+    "head-system-backend-check", "head-dispatch-check", "system-core-check", "memory-core-check",
+    "rename-recovery-ownership-check",
+    "sail-differential-check", "sail-fetched-differential-check", "spike-fetched-differential-check",
+    "act4-fetched-check"
+  ],
+  "children": {
+    "sail-differential-check": {"config": "config/sail_differential.json", "reference": "sail", "negatives": ["load_sign", "trap_value"]},
+    "sail-fetched-differential-check": {"config": "config/fetched_differential.json", "reference": "sail",
+      "negatives": ["missing_event", "extra_event", "reversed_lanes", "gpr_value", "next_pc", "trap_metadata", "memory_mask", "memory_data",
+                    "csr_effect", "fatal", "hold_drain", "short_trace", "fence_i_no_redirect", "fence_i_keeps_line"]},
+    "spike-fetched-differential-check": {"config": "config/spike_differential.json", "reference": "spike",
+      "negatives": ["missing_event", "extra_event", "reversed_lanes", "gpr_value", "next_pc", "trap_metadata", "memory_mask", "memory_data",
+                    "csr_effect", "fatal", "hold_drain", "short_trace", "fence_i_no_redirect", "fence_i_keeps_line"]},
+    "act4-fetched-check": {"config": "config/act4_fetched.json", "modes": ["normal", "stall"], "negatives": {
+      "corrupt_signature": "ACT4 FAIL tohost=3", "fail": "ACT4 FAIL tohost=3",
+      "timeout": "ACT4 instruction limit without tohost completion", "undrained_tohost": "ACT4 tohost store did not drain"}}
+  },
+  "requirements": [
+    {"id": "architectural_slice", "text": "Architectural Slice remains green", "architectural_slice": true},
+    {"id": "rename_hazards", "text": "Same-cycle two-wide RAW/WAW", "units": {
+      "rename_bundle": ["raw", "waw"], "rename_state": ["dual_rename", "rename_waw", "commit_waw"],
+      "integer_backend": ["bundle_raw", "bundle_waw"], "backend_two_wide": ["raw", "waw"]}},
+    {"id": "dual_lane_flow", "text": "Two-wide allocation, completion and retirement", "units": {
+      "rob_two_wide": ["dual_allocate", "dual_complete", "dual_retire"],
+      "backend_two_wide": ["dual_allocate", "dual_complete", "dual_retire"],
+      "fetch_execution_core": ["dual_dispatch", "dual_retire"]},
+      "differentials": {"sail-fetched-differential-check": ["dual_retire_cycles"]}},
+    {"id": "nested_recovery", "text": "Nested branch recovery and stale responses after squash", "units": {
+      "rename_checkpoints": ["nested_recovery", "younger_kill"], "rename_recovery": ["nested", "killed_wb"],
+      "backend_two_wide": ["nested_recovery", "stale_resolve", "surviving_wb"],
+      "issue_backend": ["nested_recovery", "recovery_killed"], "control_flow_backend": ["nested_resolve", "kill_held"]}},
+    {"id": "commit_recovery", "text": "Commit plus redirect and commit plus exception recovery", "units": {
+      "rename_state": ["recover_collision"], "rename_recovery": ["flush_collision", "commit_suppressed"],
+      "rob_two_wide": ["recovery_complete", "trap_priority"], "head_trap_core": ["trap_over_younger_branch"]}},
+    {"id": "identity_wraparound", "text": "ROB, IQ, checkpoint and generation wraparound", "units": {
+      "rob_two_wide": ["slot_wrap", "recovery_wrap", "wrap_block"], "issue_queue": ["recovery_wrap", "wrapped_window"],
+      "backend_two_wide": ["recovery_wrap", "generation_stall"], "rename_checkpoints": ["slot_reuse", "deferred_slot_reuse"],
+      "control_flow_backend": ["wrapped_recovery"]},
+      "differentials": {"sail-fetched-differential-check": ["rob_generation_wrap", "identity_recycles"],
+                        "spike-fetched-differential-check": ["rob_generation_wrap", "identity_recycles"]}},
+    {"id": "completion_backpressure", "text": "Completion contention, backpressure and no dropped or stale completion", "units": {
+      "backend_two_wide": ["simultaneous", "stalled_retire", "stale"], "rob_two_wide": ["backpressure", "stale", "duplicate"],
+      "integer_backend": ["completion_stall"], "control_flow_backend": ["resolve_completion_stall"],
+      "issue_queue": ["backpressure", "stalled_wakeup"]}},
+    {"id": "system_memory_ordering", "text": "Trap/CSR priority, FENCE, FENCE.I, MMIO and reset release on the two-wide core", "units": {
+      "csr_two_wide": ["trap", "mret", "reset"], "head_trap_core": ["trap_accept", "dual_retire"],
+      "memory_core": ["fence_retired", "fence_i_retired", "flush_memory_0", "reset_memory_0"]}},
+    {"id": "rename_ownership_proof", "text": "Rename/free-list formal gate (verification-plan section 5.1)", "formal": "rename_recovery_ownership",
+      "reduction": "Full hardware geometry (64 tags, 32 maps, 8 checkpoints) under a four-inflight, x0-x3 workload. Section 5.1 allows a reduced profile when the full parameters still run ownership assertions, unit tests and random stress: rename_state, rename_checkpoints, rename_recovery and backend_two_wide do, including free-list exhaustion (rename_state exhausted, backend prf_full). ROB wrap is outside the rename state: rename_recovery has no ROB index input and sees commits in program order, which the proof's ordered ledger models; ROB slot and generation wrap are covered by identity_wraparound."},
+    {"id": "isa_differential", "text": "Random differential in simple and two-wide modes",
+      "differentials": {"sail-differential-check": [], "sail-fetched-differential-check": [], "spike-fetched-differential-check": []}},
+    {"id": "selected_act4", "text": "Selected ACT4 on the two-wide core (regression)", "differentials": {"act4-fetched-check": []}}
+  ],
+  "gaps": [],
+  "limitations": [
+    "Simulation and bounded/inductive formal evidence only; no timing, physical or FPGA claim.",
+    "Conservative memory: head-only memory execution, blocking single-outstanding target. Cache and LSQ integration are outside this profile.",
+    "The rename proof is reduced to four in flight over x0-x3; wider behavior relies on full-size unit and random evidence.",
+    "Generation wrap uses the on-chip identity-recycle coordinator in fetch_execution_core (config/fetch_execution_core.json \"drain\"); its restart PC is checked by the long fetched differentials, not by formal."
+  ]
+}

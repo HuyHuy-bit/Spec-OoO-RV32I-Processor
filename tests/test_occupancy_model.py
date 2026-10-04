@@ -13,8 +13,7 @@ def loads(*misses):
 
 class OccupancyModelTest(unittest.TestCase):
     def test_hand_trace_two_miss_slots(self):
-        # c0 dispatch L0,L1; c1 launch L0 (ready 11), dispatch L2; c2 launch L1 (ready 12);
-        # L2 waits for a slot until L0's response frees one at c11 (ready 21).
+        # Two miss slots launch loads at cycles 1, 2 and 11; each response takes 10 cycles.
         ops = loads(True, True, True)
         result = simulate(Machine(mshr=2, credits=2, miss_latency=10), ops)
         self.assertEqual([op.retire_cycle for op in ops], [11, 12, 21])
@@ -57,6 +56,14 @@ class OccupancyModelTest(unittest.TestCase):
         result = simulate(Machine(mshr=4, credits=4, completion_buffer=1, miss_latency=20), ops)
         self.assertTrue(all(op.retire_cycle is not None for op in ops))
         self.assertGreater(result["wb_congested_frac"], 0)
+
+    def test_ipc_uses_the_measured_cycle_window(self):
+        # The bundle crossing warmup belongs to an uncounted cycle.
+        result = simulate(Machine(), [Op("alu") for _ in range(4)], warmup=1)
+        self.assertEqual((result["cycles"], result["ipc"], result["wb_per_cycle"]), (1, 2.0, 2.0))
+        for warmup in range(0, 300, 37):
+            result = simulate(Machine(mshr=4, credits=4), workload(3, 400, 0.3, 0.1, 0.2), warmup)
+            self.assertLessEqual(result["ipc"], Machine().width)
 
     def test_seed_reproduces(self):
         run = lambda: simulate(Machine(mshr=4, credits=4), workload(11, 500, 0.4, 0.1, 0.3, 2), 50)

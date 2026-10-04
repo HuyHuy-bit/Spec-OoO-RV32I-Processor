@@ -64,7 +64,8 @@ def fetched_coverage(events, output):
     mret = sum(e['instruction'] == 0x30200073 for e in events if e.get('retired'))
     if not (dual and fences and fence_i >= 4 and mret):
         raise ValueError('required fetched-core witnesses were not reached')
-    return dict(dual_retire_cycles=dual, fences=fences, fence_i=fence_i, mret=mret)
+    recycles = int(output.split('recycles=')[1].split()[0])
+    return dict(dual_retire_cycles=dual, fences=fences, fence_i=fence_i, mret=mret, identity_recycles=recycles)
 
 
 def build_fetched(directory=ROOT/'out/sail_fetched_differential/obj_dir', replace=None):
@@ -144,12 +145,12 @@ def spike_layout(platform, bias):
     return prefix, size, memory
 
 
-def spike_reference(spike, settings, seed, out, run):
+def spike_reference(spike, settings, seed, repeat, out, run):
     """Run the relocated image on Spike and return platform-addressed events."""
     platform = json.loads((ROOT/'config/platform.yaml').read_text())
     bias = int(settings['spike_bram_base'],0)
     prefix, size, memory = spike_layout(platform, bias)
-    image,_,end_pc = program(seed, True, bias)
+    image,_,end_pc = program(seed, True, bias, repeat)
     swaps = {int(k,0):int(v,0) for k,v in settings['spike_substitutions'].items()}
     blob = bytearray(image) + bytearray(size-len(image))
     substitutions = {}
@@ -208,7 +209,7 @@ def main():
         reference = sail = args.sail.resolve(); check_sail(sail,lock)
         settings = json.loads((ROOT/('config/fetched_differential.json' if fetched else 'config/sail_differential.json')).read_text())
         if digest(sail) != settings['sail_binary_sha256']: raise ValueError('Sail binary pin differs')
-        if settings['sail_override']['platform']['instructions_per_tick'] <= settings['instruction_limit']+1:
+        if settings['sail_override']['platform']['instructions_per_tick'] <= settings.get('long_run',settings)['instruction_limit']+1:
             raise ValueError('Sail timer tick interval must exceed the run limit')
     config = json.loads((ROOT/('config/memory_core.json' if fetched else 'config/single_lane.json')).read_text())
     versions = {}
@@ -226,7 +227,7 @@ def main():
         'sw/link/platform.ld','tests/test_sail_log.py']
     if on_spike: paths += ['config/spike_differential.json','model/iss/spike_log.py','tools/run_lockstep_smoke.py','config/references.lock']
     if fetched:
-        paths += ['config/fetched_differential.json','config/memory_core.json',config['lint_config'],
+        paths += ['config/fetched_differential.json','config/memory_core.json','config/rob_two_wide.json',config['lint_config'],
                   'verif/core/fetched_core_tb.cpp','verif/unit/packed_bits.hpp']
     paths += [str(p.relative_to(ROOT)) for p in sorted((ROOT/lock['harness']['directory']).iterdir()) if p.is_file()]
     inputs = {p:digest(ROOT/p) for p in sorted(set(paths))}
@@ -247,8 +248,12 @@ def main():
         return result.stdout
     binary = build_fetched()[0] if fetched else build_core(config)
     results = []; references = {}
-    for seed in settings['seeds']:
-        image,boot,end_pc = program(seed, fetched)
+    rob = json.loads((ROOT/'config/rob_two_wide.json').read_text())
+    generations = rob['entries'] << (rob['identity_bits'] - rob['entries'].bit_length() + 1)
+    runs = [(seed, 1, settings.get('instruction_limit')) for seed in settings['seeds']]
+    if fetched: runs.append((settings['long_run']['seed'], settings['long_run']['repeat'], settings['long_run'].get('instruction_limit')))
+    for seed,repeat,limit in runs:
+        image,boot,end_pc = program(seed, fetched, 0, repeat)
         words = [int.from_bytes(image[n:n+4],'little') for n in range(0,len(image),4)]
         if any(w & 127 == 0x73 and (w >> 12) & 3 and w >> 20 in COUNTERS for w in words):
             raise ValueError('differential program reads a timing counter')
@@ -259,20 +264,24 @@ def main():
         run(['riscv64-unknown-elf-gcc','-march=rv32i','-mabi=ilp32','-nostdlib','-nostartfiles',
              '-Wl,--no-relax,--build-id=none','-T','sw/link/platform.ld',assembly,'-o',elf],f'compile_{seed}.log')
         if on_spike:
-            expected,trace = spike_reference(reference,settings,seed,out,run)
+            expected,trace = spike_reference(reference,settings,seed,repeat,out,run)
         else:
             trace = out/f'{seed}.trace'
             run([sail,'--config',ROOT/'verif/arch/act4/sail.json','--config-override',override,
                  '--trace-instr','--trace-reg','--trace-mem','--trace-exception','--trace-step',
-                 '--trace-output',trace,'--inst-limit',settings['instruction_limit']+1,elf],f'sail_{seed}.log')
+                 '--trace-output',trace,'--inst-limit',limit+1,elf],f'sail_{seed}.log')
             expected = parse_sail_log(trace.read_text())
-            if len(expected) != settings['instruction_limit']: raise ValueError('Sail trace is incomplete')
+            if len(expected) != limit: raise ValueError('Sail trace is incomplete')
             end = next((n for n,e in enumerate(expected) if e['pc_before'] == end_pc),None)
             if end is None: raise ValueError('Sail did not reach program end')
             expected = expected[:end+1]
         if [(e['pc_before'],e['instruction']) for e in expected[:len(boot)]] != [(4*n,ins) for n,ins in enumerate(boot)]:
             raise ValueError(f'{label} initialization sequence differs')
         covered = coverage(expected[len(boot):])
+        if repeat > 1:
+            # Retirements provide a lower bound on ROB allocations.
+            if len(expected) <= generations + rob['entries']: raise ValueError('long run does not wrap ROB generations')
+            covered['rob_generation_wrap'] = len(expected) // generations
         references[seed] = (raw,image,boot,expected)
         modes = ['normal'] + (settings['extra_modes'] if seed == 42 else [])
         for mode in modes:
@@ -281,6 +290,7 @@ def main():
             if not fetched: check_trace(output,image,mode)
             count = compare_output(output,expected,boot)
             witnesses = fetched_coverage(expected,output) if fetched else {}
+            if repeat > 1 and not witnesses['identity_recycles']: raise ValueError('long run did not recycle ROB identities')
             results.append(dict(seed=seed,mode=mode,compared_events=count,coverage={**covered,**witnesses},elf_sha256=digest(elf),
                                 **{f'{args.reference}_trace_sha256':digest(trace)},rtl_log_sha256=digest(out/log),
                                 bootstrap_events_per_reset=len(boot)))

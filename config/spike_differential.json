@@ -7,6 +7,7 @@
     42,
     20260906
   ],
+  "long_run": {"seed": 7, "repeat": 12},
   "extra_modes": [
     "stall",
     "reset_fetch",
@@ -30,6 +31,6 @@
     "Spike does not log trap-time CSR writes or load data. Trap mstatus is derived from the platform MIE/MPIE rule, and load data comes from a byte memory initialized from the image and updated only by Spike's logged stores; GPR load results must agree with it.",
     "A Spike value that differs from the RTL by exactly spike_bram_base would be accepted as relocated.",
     "Transport fault injection remains in memory-core-check; this differential exercises architectural PMA faults.",
-    "This is not ACT4 acceptance, full ISA coverage, formal proof or two-wide phase closure."
+    "This does not establish ACT4 acceptance, full ISA coverage, formal proof or full two-wide core acceptance."
   ]
 }

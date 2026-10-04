@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cycle occupancy model for LQ / D$ miss-slot sizing (C0 planning input, not RTL)."""
+"""Cycle occupancy model for load-queue and cache miss-slot sizing."""
 from __future__ import annotations
 
 import argparse
@@ -62,10 +62,9 @@ def workload(seed, instructions, load_density, store_density=0.0, miss_rate=0.5,
 
 
 def simulate(machine, ops, warmup=0, max_cycles=None, fault=None):
-    """Per cycle, in order: accept responses, writeback, retire, AGU launch, dispatch.
+    """Cycle order: response, writeback, retirement, AGU launch, dispatch.
 
-    Returns window statistics over cycles that start with at least `warmup` ops retired.
-    Raises ModelError on an invariant violation or when the bounded drain times out.
+    Count retirements in cycles starting with at least `warmup` ops retired.
     """
     if fault not in FAULTS:
         raise ValueError(fault)
@@ -117,12 +116,11 @@ def simulate(machine, ops, warmup=0, max_cycles=None, fault=None):
                 lq -= 1
             sq -= op.kind == "store"
             head += 1
+            stats["retired"] += window
         stats["rob_head_load_blocked"] += (window and head < tail and ops[head].kind == "load"
                                            and not ops[head].done)
 
-        # One AGU: oldest launchable memory op. Stores are always address-ready, so every
-        # older store launches before a younger load (no load passes an unknown store
-        # address). A ready miss that finds no slot holds the AGU this cycle (replay).
+        # One AGU; stores are address-ready. A blocked miss holds the AGU for this cycle.
         for i in range(head, tail):
             op = ops[i]
             if op.kind == "alu" or op.launched:
@@ -178,7 +176,7 @@ def simulate(machine, ops, warmup=0, max_cycles=None, fault=None):
         raise ModelError("op left unretired")
     cycles = stats["cycles"] or 1
     result = {"cycles": stats["cycles"], "total_cycles": cycle,
-              "ipc": round((n - warmup) / cycles, 4),
+              "ipc": round(stats["retired"] / cycles, 4),
               "avg_outstanding_misses": round(stats["miss_cycles"] / cycles, 3),
               "max_outstanding_misses": peak}
     for key in ("agu", "wb"):

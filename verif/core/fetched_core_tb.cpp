@@ -52,7 +52,8 @@ int main(int argc,char** argv) {
         Transaction instruction, data;
         std::array<uint32_t,REQUEST_WORDS> held_i{}, held_d{};
         bool hold_i=false, hold_d=false, reset_done=false;
-        unsigned events=0, dual=0;
+        unsigned events=0, dual=0, recycles=0;
+        bool draining=false;
         bool halted=false, tohost_retired=false;
         // Ownership monitors: cached writes follow their retirement; MMIO traffic precedes it.
         std::deque<Write> cached_writes, mmio_writes;
@@ -178,7 +179,7 @@ int main(int argc,char** argv) {
             dut.eval();
             if (!reset_done && events>100 && ((mode=="reset_fetch" && instruction.pending)
                 || (mode=="reset_data" && data.pending) || (mode=="reset_commit" && dut.retire_valid_o))) {
-                reset(); reset_done=true; continue;
+                reset(); reset_done=true; draining=false; continue;
             }
             hold(dut.request_o,held_i,hold_i,dut.request_valid_o,dut.request_ready_i);
             hold(dut.data_request_o,held_d,hold_d,dut.data_request_valid_o,dut.data_request_ready_i);
@@ -195,12 +196,14 @@ int main(int argc,char** argv) {
             dut.clk_i=1; dut.eval();
             require(!dut.fatal_o,"platform fatal");
             require(act4 || events<=target,"retired past the event limit");
-            // Completion: every architectural write has drained and no MMIO traffic is unretired.
-            // ACT4 withholds retirement inside the halt loop, whose next store legitimately holds the memory path.
+            // A falling drain request marks an on-chip identity recycle.
+            if (draining && !dut.identity_drain_o) ++recycles;
+            draining=dut.identity_drain_o;
+            // ACT4's halt-loop store may hold memory_busy after all retired writes drain.
             if (done && (act4 || !dut.memory_busy_o) && !data.pending && cached_writes.empty() && mmio_writes.empty() && mmio_reads.empty()) {
                 if (++settled<4) continue;
                 require(mode.rfind("reset_",0)!=0 || reset_done,"reset scenario did not fire");
-                std::cout<<(act4 ? "ACT4 PASS events=":"CORE PASS events=")<<events<<" cycles="<<cycle+1<<" dual="<<dual<<'\n';
+                std::cout<<(act4 ? "ACT4 PASS events=":"CORE PASS events=")<<events<<" cycles="<<cycle+1<<" dual="<<dual<<" recycles="<<recycles<<'\n';
                 return 0;
             }
             settled=0;
