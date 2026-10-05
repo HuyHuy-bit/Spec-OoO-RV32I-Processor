@@ -52,13 +52,10 @@ module backend_two_wide (
   wire [1:0] rename_commit, commit_request;
   wire rob_resolve_ready, rename_resolve, rename_recover;
   wire [63:0] allocation, reclaim;
-  logic [1:0] selected, write_offer, completion_take;
+  wire [1:0] selected = {valid_i[1] && !cfi_i[0], valid_i[0]};
+  logic [1:0] write_offer, completion_take;
   logic [2:0] checkpoint_q [32];
 
-  always_comb begin
-    selected = valid_i;
-    if (cfi_i[0]) selected[1] = 0;
-  end
   for (genvar lane = 0; lane < 2; lane++) begin : completion_control
     assign write_offer[lane] = serial_selected
         ? (lane == 0 && retire_ready_i[0] && serial_event_i.rd_write_mask != 0)

@@ -85,6 +85,16 @@ class DenseMemoryTest(unittest.TestCase):
         self.assertEqual(m.cycle(True, False, 5), (0x1abcd,))
         self.assertEqual(lanes(tag, 0x1abcd), (0x1abcd,))
 
+    def test_unknown_mask_is_illegal_only_on_enabled_writes(self):
+        for shape in (WORD, Shape(16, 21, masked=False)):
+            with self.subTest(shape=shape):
+                m = DenseMemory(shape)
+                m.cycle(True, True, 0, 0x123456, (1 << shape.lanes) - 1)
+                with self.assertRaisesRegex(DenseMemoryError, "request.mask_width"):
+                    m.cycle(True, True, 0, 0, None)
+                m.cycle(False, True, 0, 0, None)
+                self.assertEqual(m.cycle(True, False, 0, wmask=None), lanes(shape, 0x123456))
+
     def test_rejects_illegal_shapes_and_requests(self):
         for shape, rule in ((Shape(8, 32), "depth_range"), (Shape(96, 32), "depth_power_of_two"),
                             (Shape(256, 256), "width_range"), (Shape(256, 21), "masked_width_multiple")):

@@ -120,6 +120,17 @@ def render_sv(config: dict, digest: str) -> str:
             f"  localparam logic [31:0] CSR_{name}_FIXED_MASK = 32'h{integer(csr['fixed_mask']):08x};",
             f"  localparam logic [31:0] CSR_{name}_FIXED_VALUE = 32'h{integer(csr['fixed_value']):08x};",
         ])
+    # Index-ordered CSR tables; entry i is config["csrs"][i] (packed arrays list MSB first).
+    names = [identifier(csr["name"]) for csr in reversed(config["csrs"])]
+    lines.append(f"  localparam int CSR_COUNT = {len(names)};")
+    for table, width, suffix in [("ADDRESSES", 12, ""), ("RESETS", 32, "_RESET"), ("WRITE_MASKS", 32, "_WRITE_MASK"),
+                                 ("FIXED_MASKS", 32, "_FIXED_MASK"), ("FIXED_VALUES", 32, "_FIXED_VALUE")]:
+        values = ", ".join(f"CSR_{name}{suffix}" for name in names)
+        lines.append(f"  localparam logic [CSR_COUNT-1:0][{width - 1}:0] CSR_{table} = {{{values}}};")
+    read_only = "".join("1" if csr["access"] == "ro" else "0" for csr in reversed(config["csrs"]))
+    lines.append(f"  localparam logic [CSR_COUNT-1:0] CSR_READ_ONLY = {len(names)}'b{read_only};")
+    lines.extend(f"  localparam int CSR_INDEX_{identifier(csr['name'])} = {index};"
+                 for index, csr in enumerate(config["csrs"]))
     for trap in config["synchronous_traps"]:
         lines.append(
             f"  localparam logic [31:0] CAUSE_{identifier(trap['name'])} = 32'd{integer(trap['cause'])};"

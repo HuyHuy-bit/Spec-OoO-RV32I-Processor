@@ -28,7 +28,7 @@ OSS_CAD_SUITE ?= $(HOME)/tools/oss-cad-suite-20260905/oss-cad-suite
 .PHONY: rename-bundle-check
 .PHONY: rename-state-check rename-checkpoints-check rename-recovery-check
 .PHONY: formal-readiness-check formal-readiness-evidence-check formal-readiness-checker-test
-.PHONY: occupancy-check occupancy-sweep dense-memory-check cache-model-check two-wide-check two-wide-evidence-check two-wide-checker-test
+.PHONY: occupancy-check occupancy-sweep dense-memory-check dense-memory-rtl-check cache-model-check two-wide-check two-wide-evidence-check two-wide-checker-test
 
 doctor:
 	@python3 tools/doctor.py --lock config/toolchain.lock --profile "$(PROFILE)"
@@ -233,6 +233,9 @@ occupancy-sweep:
 
 dense-memory-check:
 	@python3 -m unittest -v tests/test_dense_memory.py
+
+dense-memory-rtl-check:
+	@OSS_CAD_SUITE="$(OSS_CAD_SUITE)" python3 -m unittest -v tests/test_dense_memory_rtl.py
 
 cache-model-check:
 	@python3 -m unittest -v tests/test_cache_model.py

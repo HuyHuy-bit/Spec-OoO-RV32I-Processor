@@ -30,7 +30,7 @@ module load_store_prepare (
   wire [31:0] data = decoded.rs2 == 0 ? 32'd0 : source2_i;
   wire [31:0] address, cause, trap_value;
   wire fault;
-  wire [63:0] unused_execute;
+  wire [64:0] unused_execute;
   wire idempotent = (in_region(address, BRAM_BASE, BRAM_SIZE) && BRAM_IDEMPOTENT)
     || (in_region(address, UART_BASE, UART_SIZE) && UART_IDEMPOTENT)
     || (in_region(address, GPIO_BASE, GPIO_SIZE) && GPIO_IDEMPOTENT);
@@ -47,7 +47,7 @@ module load_store_prepare (
     .decoded_i(decoded), .pc_i, .instruction_i, .source1_i(base), .source2_i(data),
     .csr_value_i(32'd0), .mepc_i(32'd0), .csr_legal_i(1'b0),
     .result_o(unused_execute[31:0]), .next_pc_o(unused_execute[63:32]), .address_o(address),
-    .trap_o(fault), .cause_o(cause), .trap_value_o(trap_value)
+    .trap_o(fault), .cause_o(cause), .trap_value_o(trap_value), .taken_o(unused_execute[64])
   );
 
   always_comb begin

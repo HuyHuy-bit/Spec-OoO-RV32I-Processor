@@ -20,9 +20,9 @@ module control_flow_pipeline (
   import commit_event_pkg::*;
   decoded_t decoded;
   wire [31:0] result, next_pc, cause, trap_value;
-  wire execute_trap;
+  wire execute_trap, taken;
   wire cfi = decoded.op inside {OP_BRANCH, OP_JAL, OP_JALR};
-  logic pending_q, cfi_q, resolved_q, taken;
+  logic pending_q, cfi_q, resolved_q;
   commit_event_t built;
 
   assign busy_o = pending_q && !rst_i && !flush_i;
@@ -36,22 +36,10 @@ module control_flow_pipeline (
     .decoded_i(decoded), .pc_i, .instruction_i, .source1_i, .source2_i,
     .csr_value_i(32'd0), .mepc_i(32'd0), .csr_legal_i(1'b0),
     .result_o(result), .next_pc_o(next_pc), .address_o(),
-    .trap_o(execute_trap), .cause_o(cause), .trap_value_o(trap_value)
+    .trap_o(execute_trap), .cause_o(cause), .trap_value_o(trap_value), .taken_o(taken)
   );
 
   always_comb begin
-    taken = decoded.op inside {OP_JAL, OP_JALR};
-    if (decoded.op == OP_BRANCH) begin
-      case (decoded.funct3)
-        0: taken = source1_i == source2_i;
-        1: taken = source1_i != source2_i;
-        4: taken = $signed(source1_i) < $signed(source2_i);
-        5: taken = $signed(source1_i) >= $signed(source2_i);
-        6: taken = source1_i < source2_i;
-        7: taken = source1_i >= source2_i;
-        default: taken = 0;
-      endcase
-    end
     built = '0;
     built.valid = 1;
     built.retired = !execute_trap;

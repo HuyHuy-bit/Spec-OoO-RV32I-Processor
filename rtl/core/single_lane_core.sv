@@ -43,7 +43,7 @@ module single_lane_core (
   wire [4:0] rob_index;
   wire [127:0] prf_data;
   wire [31:0] result, next_pc, address, cause, trap_value, csr_value, mtvec, mepc;
-  wire execute_trap, csr_legal;
+  wire execute_trap, csr_legal, unused_taken;
   commit_csr_effect_t [3:0] csr_effects;
   logic build_trap;
   logic [31:0] build_cause, build_trap_value, read_word, selected_word, load_value;
@@ -92,7 +92,7 @@ module single_lane_core (
   execute_single execute_stage (
     .decoded_i(decoded), .pc_i(pc_q), .instruction_i(instruction_q), .source1_i(source1_q), .source2_i(source2_q),
     .csr_value_i(csr_value), .mepc_i(mepc), .csr_legal_i(csr_legal), .result_o(result), .next_pc_o(next_pc),
-    .address_o(address), .trap_o(execute_trap), .cause_o(cause), .trap_value_o(trap_value)
+    .address_o(address), .trap_o(execute_trap), .cause_o(cause), .trap_value_o(trap_value), .taken_o(unused_taken)
   );
   csr_single csr (
     .clk_i, .rst_i, .commit_i(retire), .commit_event_i(head_event), .decoded_i(decoded),

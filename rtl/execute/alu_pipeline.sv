@@ -26,7 +26,7 @@ module alu_pipeline (
     .decoded_i(decoded), .pc_i, .instruction_i, .source1_i, .source2_i,
     .csr_value_i(32'd0), .mepc_i(32'd0), .csr_legal_i(1'b0),
     .result_o(result), .next_pc_o(next_pc), .address_o(),
-    .trap_o(execute_trap), .cause_o(), .trap_value_o()
+    .trap_o(execute_trap), .cause_o(), .trap_value_o(), .taken_o()
   );
 
   always_comb begin

@@ -174,24 +174,26 @@ module rob_two_wide (
           tail_q <= tail_q + 5'($countones(allocate_accept_o));
           count_q <= count_q + 6'($countones(allocate_accept_o)) - 6'($countones(retire_accept_o));
           for (int lane = 0; lane < 2; lane++) begin
+            automatic logic [4:0] retired = head_q + 5'(lane);
+            automatic logic [4:0] allocated = tail_q + 5'(lane);
             if (retire_accept_o[lane]) begin
-              valid_q[5'(head_q + 5'(lane))] <= 0;
-              done_q[5'(head_q + 5'(lane))] <= 0;
+              valid_q[retired] <= 0;
+              done_q[retired] <= 0;
             end
             if (allocate_accept_o[lane]) begin
-              valid_q[5'(tail_q + 5'(lane))] <= 1;
-              done_q[5'(tail_q + 5'(lane))] <= 0;
-              cfi_q[5'(tail_q + 5'(lane))] <= allocate_cfi_i[lane];
-              resolved_q[5'(tail_q + 5'(lane))] <= 0;
-              solo_q[5'(tail_q + 5'(lane))] <= allocate_solo_i[lane];
-              pc_q[5'(tail_q + 5'(lane))] <= allocate_pc_i[lane*32 +: 32];
-              rd_q[5'(tail_q + 5'(lane))] <= allocate_rd_i[lane*5 +: 5];
-              destination_q[5'(tail_q + 5'(lane))] <= allocate_destination_i[lane*6 +: 6];
-              stale_q[5'(tail_q + 5'(lane))] <= allocate_stale_i[lane*6 +: 6];
-              generation_q[5'(tail_q + 5'(lane))] <= next_generation_q[5'(tail_q + 5'(lane))];
-              next_generation_q[5'(tail_q + 5'(lane))] <= next_generation_q[5'(tail_q + 5'(lane))] + 8'd1;
-              if (next_generation_q[5'(tail_q + 5'(lane))] == 8'hff)
-                exhausted_q[5'(tail_q + 5'(lane))] <= 1;
+              valid_q[allocated] <= 1;
+              done_q[allocated] <= 0;
+              cfi_q[allocated] <= allocate_cfi_i[lane];
+              resolved_q[allocated] <= 0;
+              solo_q[allocated] <= allocate_solo_i[lane];
+              pc_q[allocated] <= allocate_pc_i[lane*32 +: 32];
+              rd_q[allocated] <= allocate_rd_i[lane*5 +: 5];
+              destination_q[allocated] <= allocate_destination_i[lane*6 +: 6];
+              stale_q[allocated] <= allocate_stale_i[lane*6 +: 6];
+              generation_q[allocated] <= next_generation_q[allocated];
+              next_generation_q[allocated] <= next_generation_q[allocated] + 8'd1;
+              if (next_generation_q[allocated] == 8'hff)
+                exhausted_q[allocated] <= 1;
             end
           end
         end

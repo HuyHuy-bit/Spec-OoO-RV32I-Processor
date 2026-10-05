@@ -4,13 +4,12 @@ module execute_single (
   input wire [31:0] pc_i, instruction_i, source1_i, source2_i, csr_value_i, mepc_i,
   input wire csr_legal_i,
   output logic [31:0] result_o, next_pc_o, address_o,
-  output logic trap_o,
+  output logic trap_o, taken_o,
   output logic [31:0] cause_o, trap_value_o
 );
   import single_lane_pkg::*;
   import platform_pkg::*;
   logic [31:0] operand2;
-  logic taken;
   always_comb begin
     result_o = 0;
     next_pc_o = pc_i + 4;
@@ -18,7 +17,7 @@ module execute_single (
     trap_o = 0;
     cause_o = 0;
     trap_value_o = 0;
-    taken = 0;
+    taken_o = 0;
     operand2 = decoded_i.immediate_alu ? decoded_i.immediate : source2_i;
     case (decoded_i.op)
       OP_ALU: case (decoded_i.funct3)
@@ -35,19 +34,20 @@ module execute_single (
       OP_AUIPC: result_o = pc_i + decoded_i.immediate;
       OP_JAL, OP_JALR: begin
         result_o = pc_i + 4;
+        taken_o = 1;
         next_pc_o = decoded_i.op == OP_JAL ? pc_i + decoded_i.immediate : address_o & 32'hfffffffe;
       end
       OP_BRANCH: begin
         case (decoded_i.funct3)
-          0: taken = source1_i == source2_i;
-          1: taken = source1_i != source2_i;
-          4: taken = $signed(source1_i) < $signed(source2_i);
-          5: taken = $signed(source1_i) >= $signed(source2_i);
-          6: taken = source1_i < source2_i;
-          7: taken = source1_i >= source2_i;
-          default: taken = 0;
+          0: taken_o = source1_i == source2_i;
+          1: taken_o = source1_i != source2_i;
+          4: taken_o = $signed(source1_i) < $signed(source2_i);
+          5: taken_o = $signed(source1_i) >= $signed(source2_i);
+          6: taken_o = source1_i < source2_i;
+          7: taken_o = source1_i >= source2_i;
+          default: taken_o = 0;
         endcase
-        if (taken) next_pc_o = pc_i + decoded_i.immediate;
+        if (taken_o) next_pc_o = pc_i + decoded_i.immediate;
       end
       OP_LOAD, OP_STORE: begin
         if ((decoded_i.funct3[1:0] == 1 && address_o[0]) || (decoded_i.funct3[1:0] == 2 && address_o[1:0] != 0)) begin
