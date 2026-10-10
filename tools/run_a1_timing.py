@@ -45,7 +45,8 @@ def sdc(config: dict, clock_port: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
-def analyze(sta: str, liberty: Path, netlist: Path, top: str, directory: Path, constraints: str) -> dict:
+def analyze(sta: str, liberty: Path, netlist: Path, top: str, directory: Path, constraints: str,
+            constant_outputs: tuple[str, ...] = ()) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     prefix = directory.relative_to(ROOT)
     (directory / "constraints.sdc").write_text(constraints)
@@ -57,8 +58,14 @@ def analyze(sta: str, liberty: Path, netlist: Path, top: str, directory: Path, c
     if "A1 STA COMPLETE" not in log or re.search(r"(?m)^(Error|Warning):", log):
         raise RuntimeError(f"STA did not finish cleanly: {log[-2000:]}")
     coverage = (directory / "coverage.rpt").read_text().strip()
+    constant_endpoints = []
     if coverage:
-        raise RuntimeError(f"incomplete timing constraints in {top}: {coverage}")
+        match = re.fullmatch(r'Warning: There are (\d+) unconstrained endpoints\.\n((?:  \S+\n?)+)', coverage)
+        if match:
+            constant_endpoints = match[2].split()
+        if (not match or int(match[1]) != len(constant_endpoints)
+                or not set(constant_endpoints) <= set(constant_outputs)):
+            raise RuntimeError(f"incomplete timing constraints in {top}: {coverage}")
     slack = re.search(r'worst slack\s+(-?[\d.]+)', (directory / "worst_slack.rpt").read_text())
     tns = re.search(r'tns\s+(-?[\d.]+)', (directory / "tns.rpt").read_text())
     hold = re.findall(r'(-?[\d.]+)\s+slack \(', (directory / "hold.rpt").read_text())
@@ -74,7 +81,8 @@ def analyze(sta: str, liberty: Path, netlist: Path, top: str, directory: Path, c
                               (directory / name).read_text()))
     return {"setup_worst_slack_ns": float(slack[1]), "setup_tns_ns": float(tns[1]),
             "critical_setup_startpoint": start[1], "critical_setup_endpoint": end[1],
-            "hold_worst_slack_ns": min(map(float, hold)), "unconstrained_endpoints": 0,
+            "hold_worst_slack_ns": min(map(float, hold)), "unconstrained_endpoints": len(constant_endpoints),
+            "unconstrained_nonconstant_endpoints": 0, "constant_output_endpoints": constant_endpoints,
             "setup_hold_violation_count": count("setup_hold_violations.rpt"),
             "slew_violation_count": count("slew_violations.rpt"),
             "setup_hold_met": float(slack[1]) >= 0 and min(map(float, hold)) >= 0}

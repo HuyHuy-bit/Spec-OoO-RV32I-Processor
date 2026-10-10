@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "image": "ghcr.io/librelane/librelane@sha256:02d50f259d483979e126ef188a50f5b61e1d285b9d538312f280b087439b0302",
+  "librelane": "3.0.16",
+  "openroad_commit": "dcf36133a369abc8f3c5e5738cd4d82e4903c0e0",
+  "pdk_revision": "8afc8346a57fe1ab7934ba5a6056ea8b43078e71",
+  "pdk": "sky130A",
+  "standard_cell_library": "sky130_fd_sc_hd",
+  "candidates": ["small_direct_parallel", "balanced_parallel"],
+  "jobs": 2,
+  "memory_gib": 6,
+  "memory_with_swap_gib": 8,
+  "stop_after": "OpenROAD.STAMidPNR-3",
+  "flow": {
+    "meta": {
+      "flow": "Classic",
+      "substituting_steps": {
+        "+OpenROAD.ResizerTimingPostGRT": "OpenROAD.RepairAntennas"
+      }
+    },
+    "USE_SLANG": true,
+    "FP_CORE_UTIL": 35,
+    "PL_TARGET_DENSITY_PCT": 50,
+    "ERROR_ON_LINTER_WARNINGS": true,
+    "LINTER_DISABLE_WARNINGS": ["DECLFILENAME", "UNUSEDSIGNAL"],
+    "GRT_ALLOW_CONGESTION": false,
+    "RUN_POST_GRT_DESIGN_REPAIR": true,
+    "RUN_POST_GRT_RESIZER_TIMING": true
+  }
+}

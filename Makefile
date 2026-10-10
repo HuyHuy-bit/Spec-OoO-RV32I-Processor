@@ -237,6 +237,16 @@ dense-memory-check:
 dense-memory-rtl-check:
 	@OSS_CAD_SUITE="$(OSS_CAD_SUITE)" python3 -m unittest -v tests/test_dense_memory_rtl.py
 
+.PHONY: storage-pilot-check storage-pilot-synth storage-pilot-physical
+storage-pilot-check:
+	@python3 tools/run_storage_pilot.py --mutations
+
+storage-pilot-synth:
+	@python3 tools/run_storage_pilot.py --synth --mutations --suite "$(OSS_CAD_SUITE)"
+
+storage-pilot-physical:
+	@python3 tools/run_storage_pilot.py --physical
+
 cache-model-check:
 	@python3 -m unittest -v tests/test_cache_model.py
 

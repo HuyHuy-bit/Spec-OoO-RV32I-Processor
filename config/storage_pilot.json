@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "scope": "Storage-only I/D pair: data, tags, valid/dirty bits, explicit replacement updates, tag comparison and way muxes. Bank-group interface; excludes line assembly, victim/refill buffers, cache controllers, LSQ and core.",
+  "line_bytes": 32,
+  "seeds": [1, 42],
+  "random_cycles": 2000,
+  "candidates": [
+    {"name": "small_direct_parallel", "i_bytes": 512, "d_bytes": 512, "ways": 1, "bank_words": 8},
+    {"name": "small_associative_serial", "i_bytes": 512, "d_bytes": 512, "ways": 2, "bank_words": 1},
+    {"name": "balanced_parallel", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 8},
+    {"name": "balanced_serial", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 1},
+    {"name": "balanced_interleaved", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 2},
+    {"name": "asymmetric_parallel", "i_bytes": 4096, "d_bytes": 1024, "ways": 2, "bank_words": 8},
+    {"name": "baseline_parallel", "i_bytes": 4096, "d_bytes": 4096, "ways": 2, "bank_words": 8}
+  ],
+  "timing": {
+    "schema": 1,
+    "period_ns": 40.0,
+    "clock_transition_ns": 0.1,
+    "clock_latency_ns": 0.0,
+    "setup_uncertainty_ns": 0.2,
+    "hold_uncertainty_ns": 0.05,
+    "input_delay_min_ns": 0.2,
+    "input_delay_max_ns": 2.0,
+    "output_delay_min_ns": 0.2,
+    "output_delay_max_ns": 2.0,
+    "input_transition_ns": 0.1,
+    "output_load_pf": 0.01,
+    "max_transition_ns": 1.5,
+    "max_capacitance_pf": 0.2,
+    "max_fanout": 32,
+    "wire_load_model": "Small",
+    "wire_load_mode": "top",
+    "abc_driver": "sky130_fd_sc_hd__buf_1",
+    "abc_load_ff": 10.0,
+    "dont_use": ["sky130_fd_sc_hd__lpflow_*", "sky130_fd_sc_hd__probe*"],
+    "exceptions": [],
+    "scope": "40 ns is an experiment constraint, not a core clock selection. Nominal TT pre-layout wire-load timing only."
+  }
+}
