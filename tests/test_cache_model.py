@@ -18,7 +18,7 @@ class CacheModelTest(unittest.TestCase):
     def test_contract_matches_config(self):
         self.assertEqual(json.loads((ROOT / "config/cache.json").read_text()), CONTRACT)
         dcache, icache = configured("dcache"), configured("icache")
-        self.assertEqual((dcache.g.sets, dcache.writable), (64, True))
+        self.assertEqual((dcache.g.sets, dcache.writable), (16, True))
         self.assertEqual((icache.g, icache.writable), (dcache.g, False))
         with self.assertRaisesRegex(CacheError, "store_to_read_only"):
             icache.store(0, 4, 0)
@@ -104,6 +104,21 @@ class CacheModelTest(unittest.TestCase):
             for seed in (1, 42, 20261004):
                 with self.subTest(geometry=geometry, seed=seed):
                     self._random(geometry, random.Random(seed))
+
+    def test_capacity_does_not_change_architectural_results(self):
+        geometries = (configured("dcache").g, Geometry(4096, 2, 32), Geometry(512, 1, 32))
+        rng = random.Random(20261013)
+        trace = [(rng.random() < 0.4, rng.randrange(0, 16384, size), size, rng.getrandbits(8 * size))
+                 for size in (rng.choice((1, 2, 4)) for _ in range(5000))]
+        results = []
+        for g in geometries:
+            c = cache(g)
+            loads = [c.store(a, n, v).data if st else c.load(a, n).data for st, a, n, v in trace]
+            c.flush()
+            results.append((loads, {a: c.memory.load(a, 1) for _, a, n, _ in trace for a in range(a, a + n)}))
+        for g, result in zip(geometries[1:], results[1:]):
+            with self.subTest(geometry=g):
+                self.assertEqual(result, results[0])
 
     def _random(self, g, rng):
         c, flat = cache(g), {}

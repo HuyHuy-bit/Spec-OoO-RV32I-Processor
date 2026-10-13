@@ -22,7 +22,8 @@ from run_a1_timing import analyze, sdc
 
 TOP = "cache_storage_pair_probe"
 OUT = ROOT / "out/storage_pilot"
-SOURCES = ["rtl/memory/dense_memory_1rw.sv", "synth/experiments/cache_storage_pair_probe.sv"]
+SOURCES = ["rtl/memory/dense_memory_1rw_array.sv", "rtl/memory/dense_memory_1rw.sv",
+           "synth/experiments/cache_storage_pair_probe.sv"]
 BENCH = "verif/unit/cache_storage_pair_probe_tb.sv"
 INPUTS = [*SOURCES, BENCH, "Makefile", "config/storage_pilot.json", "config/dense_memory.json",
           "config/a1_timing.lock", "config/synthesis.lock", "config/toolchain.lock",
@@ -220,10 +221,10 @@ def mutations(config):
     changes = {
         'mask_ignored': (0, 'if (wmask_i[lane])', "if (1'b1)"),
         'row_alias': (0, 'array_q[addr_i]', 'array_q[addr_i >> 1]'),
-        'invalid_reset': (1, 'valid_q[s] <= 0;', "valid_q[s] <= '1;"),
-        'replacement_reversed': (1, 'lru_q[index] <= !way_i;', 'lru_q[index] <= way_i;'),
-        'tag_ignored': (1, 'tags[w] == read_tag_q', "1'b1"),
-        'dirty_inverted': (1, 'HAS_DIRTY && dirty_i', 'HAS_DIRTY && !dirty_i'),
+        'invalid_reset': (2, 'valid_q[s] <= 0;', "valid_q[s] <= '1;"),
+        'replacement_reversed': (2, 'lru_q[index] <= !way_i;', 'lru_q[index] <= way_i;'),
+        'tag_ignored': (2, 'tags[w] == read_tag_q', "1'b1"),
+        'dirty_inverted': (2, 'HAS_DIRTY && dirty_i', 'HAS_DIRTY && !dirty_i'),
     }
     results = {}
     for name, (index, old, new) in changes.items():

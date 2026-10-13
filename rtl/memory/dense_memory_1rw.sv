@@ -1,5 +1,5 @@
 `default_nettype none
-// One synchronous read or masked write per cycle; read data is valid after a read edge.
+// behavioral provider: any shape legal under config/dense_memory.json.
 module dense_memory_1rw #(
   parameter int DEPTH = 16,
   parameter int WIDTH = 128,
@@ -15,33 +15,6 @@ module dense_memory_1rw #(
   input  wire [LANES-1:0]     wmask_i,
   output logic [WIDTH-1:0]    rdata_o
 );
-  localparam int GRANULE = WIDTH / LANES;
-
-  if (DEPTH < 16 || DEPTH > 1024 || (DEPTH & (DEPTH - 1)) != 0
-      || WIDTH < 1 || WIDTH > 128 || (MASKED && WIDTH % 8 != 0)) begin : g_illegal_shape
-    $error("dense_memory_1rw: illegal shape");
-  end
-
-  // Payload has no reset; enable low ignores every other input.
-  logic [WIDTH-1:0] array_q [DEPTH];
-
-  always_ff @(posedge clk_i) begin
-    if (en_i && we_i) begin
-      for (int lane = 0; lane < LANES; lane++)
-        if (wmask_i[lane])
-          array_q[addr_i][lane*GRANULE +: GRANULE] <= wdata_i[lane*GRANULE +: GRANULE];
-    end else if (en_i) begin
-      rdata_o <= array_q[addr_i];
-    end
-  end
-
-`ifndef SYNTHESIS
-  always_ff @(posedge clk_i) begin
-    assert (!en_i || !$isunknown({we_i, addr_i}))
-      else $fatal(1, "DENSE_MEMORY_ILLEGAL_REQUEST");
-    assert (!(en_i && we_i) || !$isunknown(wmask_i))
-      else $fatal(1, "DENSE_MEMORY_ILLEGAL_MASK");
-  end
-`endif
+  dense_memory_1rw_array #(.DEPTH(DEPTH), .WIDTH(WIDTH), .MASKED(MASKED)) storage (.*);
 endmodule
 `default_nettype wire

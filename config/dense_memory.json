@@ -28,6 +28,11 @@
     "masked_width_multiple": 8,
     "rule": "A masked shape has one write-mask bit per 8-bit byte. An unmasked shape, such as a tag array, has one mask bit for the whole word."
   },
+  "g0_shapes": [
+    {"depth": 16, "width": 128, "masked": true},
+    {"depth": 16, "width": 23, "masked": false}
+  ],
+  "g0_rule": "The G0 standard-cell provider (rtl/memory/g0/dense_memory_1rw.sv) elaborates only these shapes. They are the leaves of the config/cache.json geometry; changing either file requires changing both and the provider.",
   "throughput": "One read or one write per cycle. A dual-port or read-during-write form is a separate contract, not a parameter of this one.",
   "polarity": "Enable, write enable and write-mask bits are active high at the wrapper. Providers convert to macro polarity.",
   "output_hold": "Read data is defined only in the cycle read_latency cycles after the read was accepted. In every other cycle, including after a write, an idle cycle or reset, the output is unknown; consumers register what they need.",

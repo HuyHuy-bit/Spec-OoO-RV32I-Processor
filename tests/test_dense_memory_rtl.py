@@ -6,19 +6,22 @@ import subprocess
 import tempfile
 import unittest
 
-from model.dense_memory import DenseMemory, Shape, lanes
+from model.dense_memory import CONTRACT, DenseMemory, Shape, lanes
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = [ROOT / "rtl/memory/dense_memory_1rw.sv", ROOT / "verif/unit/dense_memory_1rw_tb.sv"]
+ARRAY, BENCH = ROOT / "rtl/memory/dense_memory_1rw_array.sv", ROOT / "verif/unit/dense_memory_1rw_tb.sv"
+SOURCES = [ROOT / "rtl/memory/dense_memory_1rw.sv", ARRAY, BENCH]
+G0_SOURCES = [ROOT / "rtl/memory/g0/dense_memory_1rw.sv", ARRAY, BENCH]
+G0_SHAPES = [Shape(s["depth"], s["width"], s["masked"]) for s in CONTRACT["g0_shapes"]]
 # Line-wide data slice, unmasked tag, deepest narrow leaf.
 SHAPES = [Shape(16, 128), Shape(64, 21, masked=False), Shape(1024, 8)]
 SEEDS, CYCLES = (1, 42, 20261005), 3000
 
 
-def verilator(shape, out, *flags):
+def verilator(shape, out, *flags, sources=SOURCES):
     params = [f"-GDEPTH={shape.depth}", f"-GWIDTH={shape.width}", f"-GMASKED={int(shape.masked)}"]
     return subprocess.run(["verilator", *flags, "--timing", "--assert", "--Wall", "--top-module",
-                           "dense_memory_1rw_tb", *params, "--Mdir", str(out), *map(str, SOURCES)],
+                           "dense_memory_1rw_tb", *params, "--Mdir", str(out), *map(str, sources)],
                           capture_output=True, text=True)
 
 
@@ -74,10 +77,11 @@ class DenseMemoryRtlTest(unittest.TestCase):
                         self.assertEqual(set(outputs[-1]), {"x"})
 
     def test_rtl_matches_model(self):
-        for shape in SHAPES:
-            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as tmp:
+        cases = [(s, SOURCES) for s in SHAPES] + [(s, G0_SOURCES) for s in G0_SHAPES]
+        for shape, sources in cases:
+            with self.subTest(shape=shape, provider=sources[0].parent.name), tempfile.TemporaryDirectory() as tmp:
                 tmp = Path(tmp)
-                build = verilator(shape, tmp / "obj", "--binary", "--build-jobs", "2")
+                build = verilator(shape, tmp / "obj", "--binary", "--build-jobs", "2", sources=sources)
                 self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
                 for seed in SEEDS:
                     steps = list(stimulus(shape, seed))
@@ -103,6 +107,23 @@ class DenseMemoryRtlTest(unittest.TestCase):
                 lint = verilator(shape, tmp, "--lint-only")
                 self.assertNotEqual(lint.returncode, 0)
                 self.assertIn("illegal shape", lint.stdout + lint.stderr)
+
+    def test_g0_rejects_shapes_outside_whitelist(self):
+        # legal for the behavioral provider, not g0 leaves.
+        for shape in (Shape(32, 128), Shape(16, 64), Shape(64, 128), Shape(16, 24, masked=False),
+                      Shape(16, 128, masked=False), Shape(64, 21, masked=False)):
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as tmp:
+                self.assertEqual(verilator(shape, tmp, "--lint-only").returncode, 0)
+                lint = verilator(shape, tmp, "--lint-only", sources=G0_SOURCES)
+                self.assertNotEqual(lint.returncode, 0)
+                self.assertIn("not in G0 whitelist", lint.stdout + lint.stderr)
+
+    def test_one_provider_per_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            both = verilator(Shape(16, 128), tmp, "--lint-only", sources=[*SOURCES, G0_SOURCES[0]])
+            self.assertNotEqual(both.returncode, 0)
+            missing = verilator(Shape(16, 128), tmp, "--lint-only", sources=[ARRAY, BENCH])
+            self.assertNotEqual(missing.returncode, 0)
 
 
 if __name__ == "__main__":

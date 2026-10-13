@@ -15,6 +15,17 @@ def word(data):
 
 
 class DenseMemoryTest(unittest.TestCase):
+    def test_g0_shapes_are_the_cache_geometry_leaves(self):
+        from model.cache import configured
+        leaves = set()
+        for name in ("icache", "dcache"):
+            g = configured(name).g
+            # two masked data slices per way, one unmasked tag of a 32-bit address.
+            leaves.add(Shape(g.sets, g.line_bytes * 4))
+            leaves.add(Shape(g.sets, 32 - (g.line_bytes * g.sets - 1).bit_length(), masked=False))
+        g0 = {Shape(s["depth"], s["width"], s["masked"]) for s in CONTRACT["g0_shapes"]}
+        self.assertEqual(g0, leaves)
+
     def test_contract_covers_every_architecture_item(self):
         contract = json.loads((ROOT / "config/dense_memory.json").read_text())
         self.assertEqual(contract, CONTRACT)
