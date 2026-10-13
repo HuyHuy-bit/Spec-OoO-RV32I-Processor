@@ -237,7 +237,7 @@ dense-memory-check:
 dense-memory-rtl-check:
 	@OSS_CAD_SUITE="$(OSS_CAD_SUITE)" python3 -m unittest -v tests/test_dense_memory_rtl.py
 
-.PHONY: storage-pilot-check storage-pilot-synth storage-pilot-physical
+.PHONY: storage-pilot-check storage-pilot-synth storage-pilot-physical storage-pilot-sta
 storage-pilot-check:
 	@python3 tools/run_storage_pilot.py --mutations
 
@@ -246,6 +246,10 @@ storage-pilot-synth:
 
 storage-pilot-physical:
 	@python3 tools/run_storage_pilot.py --physical
+
+storage-pilot-sta:
+	@test -n "$(STORAGE_SUMMARY)" || (echo 'Set STORAGE_SUMMARY to the retained physical summary.json'; exit 1)
+	@python3 tools/run_storage_pilot.py --physical-sta-from "$(STORAGE_SUMMARY)"
 
 cache-model-check:
 	@python3 -m unittest -v tests/test_cache_model.py

@@ -7,6 +7,11 @@
   "pdk": "sky130A",
   "standard_cell_library": "sky130_fd_sc_hd",
   "candidates": ["small_direct_parallel", "balanced_parallel"],
+  "analysis_corners": [
+    "nom_tt_025C_1v80", "nom_ss_100C_1v60", "nom_ff_n40C_1v95",
+    "min_tt_025C_1v80", "min_ss_100C_1v60", "min_ff_n40C_1v95",
+    "max_tt_025C_1v80", "max_ss_100C_1v60", "max_ff_n40C_1v95"
+  ],
   "jobs": 2,
   "memory_gib": 6,
   "memory_with_swap_gib": 8,

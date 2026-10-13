@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -78,6 +79,78 @@ class UnitRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'input changed'):
                 run.publish({})
             self.assertFalse((run.out/'receipt.json').exists())
+
+
+class StorageTimingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.object(sys, 'path', [str(ROOT/'tools'), *sys.path]):
+            import run_storage_pilot
+        cls.read_timing = staticmethod(run_storage_pilot.timing_measurements)
+        cls.check_rc = staticmethod(run_storage_pilot.verify_corner_rc)
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.stage = Path(self.temp.name)
+        self.corner = 'nom_tt_025C_1v80'
+        self.metrics = {k+'__corner:'+self.corner: 0 for k in (
+            'design__max_slew_violation__count', 'design__max_cap_violation__count',
+            'design__max_fanout_violation__count', 'timing__setup_vio__count', 'timing__hold_vio__count')}
+        self.metrics.update({'timing__setup__ws__corner:'+self.corner: 1.0,
+                             'timing__hold__ws__corner:'+self.corner: 0.1})
+        (self.stage/'checks.rpt').write_text('check_setup -verbose\n====\n')
+
+    def read(self):
+        (self.stage/'or_metrics_out.json').write_text(json.dumps(self.metrics))
+        return self.read_timing(self.stage, self.corner)
+
+    def test_fresh_corner_passes(self):
+        self.assertTrue(self.read()['reported_checks_passed'])
+
+    def test_stale_state_metrics_cannot_hide_fresh_violations(self):
+        (self.stage/'state_out.json').write_text(json.dumps({'metrics': self.metrics}))
+        self.metrics['timing__hold_vio__count__corner:'+self.corner] = 1
+        self.assertFalse(self.read()['reported_checks_passed'])
+
+    def test_negative_slack_fails_even_with_zero_counts(self):
+        self.metrics['timing__hold__ws__corner:'+self.corner] = -0.001
+        self.assertFalse(self.read()['reported_checks_passed'])
+
+    def test_nonfinite_and_missing_path_slack_rejected(self):
+        for value in (float('nan'), float('inf'), 1e30):
+            with self.subTest(value=value):
+                self.metrics['timing__setup__ws__corner:'+self.corner] = value
+                with self.assertRaisesRegex(RuntimeError, 'invalid or missing-path'):
+                    self.read()
+
+    def test_missing_constraint_rejected(self):
+        (self.stage/'checks.rpt').write_text('check_setup -verbose\n====\nWarning: missing input delay\n')
+        with self.assertRaisesRegex(RuntimeError, 'coverage is incomplete'):
+            self.read()
+
+    def test_wrong_or_mixed_corner_rejected(self):
+        self.metrics['timing__hold__ws__corner:max_ss_100C_1v60'] = 1.0
+        with self.assertRaisesRegex(RuntimeError, 'requested corner'):
+            self.read()
+        self.metrics = {k.replace(self.corner, 'min_ff_n40C_1v95'): v for k, v in self.metrics.items()}
+        with self.assertRaisesRegex(RuntimeError, 'requested corner'):
+            self.read()
+
+    def test_missing_metric_rejected(self):
+        del self.metrics['timing__hold_vio__count__corner:'+self.corner]
+        with self.assertRaises(KeyError):
+            self.read()
+
+    def test_missing_or_incorrect_rc_overrides_rejected(self):
+        rc = {'layers': {'met1': {'res': 0.001, 'cap': 0.0001}}, 'vias': {'via': {'res': 0.009}}}
+        layer = '+ set_layer_rc -layer met1 -capacitance 0.0001 -corner '+self.corner+' -resistance 0.001\n'
+        via = '+ set_layer_rc -corner '+self.corner+' -resistance 0.009 -via via\n'
+        self.check_rc(layer+via, self.corner, rc)
+        for log in (layer, via, (layer+via).replace('0.009', '0.000009'),
+                    (layer+via).replace(self.corner, 'max_ss_100C_1v60')):
+            with self.subTest(log=log), self.assertRaises(RuntimeError):
+                self.check_rc(log, self.corner, rc)
 
 
 if __name__ == '__main__':

@@ -5,11 +5,13 @@ from collections import Counter
 from fnmatch import fnmatchcase
 import json
 import hashlib
+import math
 from pathlib import Path
 import random
 import re
 import os
 import signal
+import shutil
 import subprocess
 import time
 import tarfile
@@ -264,6 +266,25 @@ def physical_preflight(flow, pdk_store):
     return pdk_root
 
 
+def timing_measurements(stage, corner):
+    coverage = (stage/'checks.rpt').read_text().split('check_setup -verbose', 1)
+    if len(coverage) != 2 or re.sub(r'[=\s]', '', coverage[1].split('\n', 1)[1]):
+        raise RuntimeError('Physical timing coverage is incomplete')
+    fresh = json.loads((stage/'or_metrics_out.json').read_text())
+    reported = {k.split('__corner:', 1)[1] for k in fresh if '__corner:' in k}
+    if reported != {corner}:
+        raise RuntimeError('Fresh timing metrics do not match the requested corner')
+    violations = ['design__max_slew_violation__count', 'design__max_cap_violation__count',
+                  'design__max_fanout_violation__count', 'timing__setup_vio__count', 'timing__hold_vio__count']
+    slacks = ['timing__setup__ws', 'timing__hold__ws']
+    values = {k: fresh[k+'__corner:'+corner] for k in violations + slacks}
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) and abs(v) < 1e20 for v in values.values()):
+        raise RuntimeError('Timing metrics contain invalid or missing-path values')
+    passed = all(values[k] == 0 for k in violations) and all(values[k] >= 0 for k in slacks)
+    return {'fresh_timing_metrics': fresh, 'timing_corner': corner,
+            'reported_checks_passed': passed, 'timing_coverage_checked': True}
+
+
 def physical_measurements(run_directory):
     states = sorted(run_directory.glob('*/state_out.json'), key=lambda p: int(p.parent.name.split('-')[0]))
     if not states or not states[-1].parent.name.endswith('openroad-stamidpnr-3'):
@@ -272,21 +293,10 @@ def physical_measurements(run_directory):
         raise RuntimeError('Final antenna repair/check must precede timing analysis')
     if json.loads(states[-2].read_text())['odb'] != json.loads(states[-1].read_text())['odb']:
         raise RuntimeError('Antenna and timing checks use different physical databases')
-    stage = states[-1].parent
-    coverage = (stage/'checks.rpt').read_text().split('check_setup -verbose', 1)
-    if len(coverage) != 2 or re.sub(r'[=\s]', '', coverage[1].split('\n', 1)[1]):
-        raise RuntimeError('Physical timing coverage is incomplete')
     metrics = json.loads(states[-1].read_text())['metrics']
-    fresh = json.loads((stage/'or_metrics_out.json').read_text())
-    corner = 'nom_tt_025C_1v80'
-    violations = ['design__max_slew_violation__count', 'design__max_cap_violation__count',
-                  'design__max_fanout_violation__count', 'timing__setup_vio__count', 'timing__hold_vio__count']
-    checks_passed = all(fresh[k+'__corner:'+corner] == 0 for k in violations)
-    checks_passed &= all(fresh[k+'__corner:'+corner] >= 0 for k in ('timing__setup__ws', 'timing__hold__ws'))
-    checks_passed &= metrics['route__antenna_violation__count'] == 0
-    return {'metrics': metrics, 'fresh_timing_metrics': fresh, 'timing_corner': corner,
-            'reported_checks_passed': checks_passed, 'timing_coverage_checked': True,
-            'final_state': str(states[-1].relative_to(ROOT))}
+    timing = timing_measurements(states[-1].parent, 'nom_tt_025C_1v80')
+    timing['reported_checks_passed'] &= metrics['route__antenna_violation__count'] == 0
+    return {'metrics': metrics, **timing, 'final_state': str(states[-1].relative_to(ROOT))}
 
 
 def physical(candidate, config, directory, flow, pdk_root):
@@ -321,6 +331,179 @@ def physical(candidate, config, directory, flow, pdk_root):
             'geometry_approved': False}
 
 
+def verify_corner_rc(log, corner, expected):
+    applied = {'layers': {}, 'vias': {}}
+    for line in log.splitlines():
+        fields = line.split()
+        if fields[:2] != ['+', 'set_layer_rc']:
+            continue
+        args = dict(zip(fields[2::2], fields[3::2]))
+        if args.get('-corner') != corner:
+            raise RuntimeError('RC override applied to the wrong corner')
+        if '-layer' in args:
+            applied['layers'][args['-layer']] = {'res': float(args['-resistance']), 'cap': float(args['-capacitance'])}
+        elif '-via' in args:
+            applied['vias'][args['-via']] = {'res': float(args['-resistance'])}
+    for kind in ('layers', 'vias'):
+        if set(applied[kind]) != set(expected[kind]):
+            raise RuntimeError('Missing '+kind+' RC overrides')
+        for name, values in expected[kind].items():
+            if any(not math.isclose(applied[kind][name][k], v, rel_tol=1e-9, abs_tol=1e-15) for k, v in values.items()):
+                raise RuntimeError('Applied RC differs from technology export')
+
+
+def routed_corner_study(source, flow, pdk_root, selected):
+    prior = json.loads(source.read_text())
+    candidates = [c for c in prior['candidates'] if not selected or c['candidate']['name'] in selected]
+    if not candidates or (selected and set(selected) != {c['candidate']['name'] for c in candidates}):
+        raise ValueError('Requested candidates are missing from the physical summary')
+    corners = flow['analysis_corners']
+    supported = {r+'_'+p for r in ('nom', 'min', 'max')
+                 for p in ('tt_025C_1v80', 'ss_100C_1v60', 'ff_n40C_1v95')}
+    if set(corners) != supported or len(corners) != len(supported):
+        raise ValueError('Expected all nine storage timing corners exactly once')
+    hashes = {p: digest(ROOT/p) for p in [*INPUTS, 'config/storage_physical.json', 'tests/test_unit_runner.py']}
+    source_hash = digest(source)
+    run_id = hashlib.sha256(json.dumps([hashes, source_hash, selected], sort_keys=True).encode()).hexdigest()[:16]
+    directory = OUT/('corners-'+run_id)
+    directory.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(source, directory/'source_summary.json')
+    docker = ['docker', 'run', '--rm', '--user', f'{os.getuid()}:{os.getgid()}',
+              '--cpus', str(flow['jobs']), '--memory', f"{flow['memory_gib']}g",
+              '--memory-swap', f"{flow['memory_with_swap_gib']}g", '-v', f'{ROOT}:{ROOT}',
+              '-v', f'{pdk_root}:/pdk:ro', '-w', str(ROOT), flow['image']]
+    def execute(command, work, label):
+        container = 'storage-sta-'+hashlib.sha256(str(work/label).encode()).hexdigest()[:16]
+        try:
+            return run(docker[:3]+['--name', container]+docker[3:]+command, work, label)
+        finally:
+            subprocess.run(['docker', 'rm', '-f', container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    rc = {}
+    collateral = {}
+    for interconnect in ('nom', 'min', 'max'):
+        tech = f"{flow['pdk']}/libs.ref/{flow['standard_cell_library']}/techlef/{flow['standard_cell_library']}__{interconnect}.tlef"
+        collateral[tech] = digest(pdk_root/tech)
+        script = directory/(interconnect+'_rc.tcl')
+        script.write_text('read_lef {/pdk/'+tech+'}\n'+'''set_cmd_units -time ns -capacitance pF -resistance kOhm -distance um
+foreach layer [[ord::get_db_tech] getLayers] {
+    if {[$layer getType] eq "ROUTING"} {
+        lassign [est::dblayer_wire_rc $layer] r c
+        puts "PILOT_LAYER [$layer getName] [expr {$r * [sta::unit_scale distance] / [sta::unit_scale resistance]}] [expr {$c * [sta::unit_scale distance] / [sta::unit_scale capacitance]}]"
+    } elseif {[$layer getType] eq "CUT"} {
+        puts "PILOT_VIA [$layer getName] [expr {[$layer getResistance] / [sta::unit_scale resistance]}]"
+    }
+}
+''')
+        execute(['openroad', '-exit', str(script)], directory, interconnect+'_rc')
+        layers, vias = {}, {}
+        for line in (directory/(interconnect+'_rc.log')).read_text().splitlines():
+            fields = line.split()
+            if fields[:1] == ['PILOT_LAYER']:
+                layers[fields[1]] = dict(res=float(fields[2]), cap=float(fields[3]))
+            elif fields[:1] == ['PILOT_VIA']:
+                vias[fields[1]] = dict(res=float(fields[2]))
+        if set(layers) != {'li1', 'met1', 'met2', 'met3', 'met4', 'met5'} or len(vias) != 6:
+            raise RuntimeError('Incomplete technology RC export')
+        rc[interconnect] = {'layers': layers, 'vias': vias}
+    (directory/'rc.json').write_text(json.dumps(rc, indent=2)+'\n')
+    results = []
+    for candidate in candidates:
+        name = candidate['candidate']['name']
+        if not re.fullmatch('[a-z][a-z0-9_]*', name):
+            raise ValueError('Invalid candidate name')
+        old = candidate['physical']
+        for key in ('image', 'pdk_revision', 'pdk', 'standard_cell_library', 'openroad_commit'):
+            if old['toolchain'][key] != flow[key]:
+                raise RuntimeError('Saved physical toolchain differs: '+key)
+        for p in [*SOURCES, 'config/storage_pilot.json', 'config/dense_memory.json']:
+            if candidate['inputs_sha256'][p] != hashes[p]:
+                raise RuntimeError('Saved physical design differs from current inputs: '+p)
+        state_path = ROOT/old['final_state']
+        state = json.loads(state_path.read_text())
+        retained = [state_path, Path(state['odb']), Path(state['sdc']), state_path.parent/'config.json']
+        for p in retained:
+            if digest(p) != candidate['artifacts_sha256'][str(p.relative_to(ROOT))]:
+                raise RuntimeError('Saved physical artifact hash mismatch: '+str(p))
+        settings = json.loads((state_path.parent/'config.json').read_text())
+        target = directory/name
+        target.mkdir()
+        snapshot = {}
+        for kind in ('odb', 'sdc'):
+            dest = target/('input.'+kind)
+            shutil.copy2(state[kind], dest)
+            snapshot[kind] = str(dest)
+        snapshot['metrics'] = {}
+        initial = target/'state_in.json'
+        initial.write_text(json.dumps(snapshot, indent=2)+'\n')
+        registers = state['metrics']['design__instance__count__class:sequential_cell']
+        audit = target/'audit.tcl'
+        audit.write_text('''if {[llength [all_clocks]] != 1} {error "unexpected clock count"}
+set clock [get_clocks core]
+if {[get_property $clock is_virtual] || ![get_property $clock is_propagated]} {error "clock is not propagated"}
+if {![grt::have_routes]} {error "missing global routes"}
+set count [llength [all_registers -clock core]]
+'''+f'if {{$count != {registers}}} {{error "unexpected register count"}}\n'+
+                         f'if {{abs([get_property $clock period] - {settings["CLOCK_PERIOD"]}) > 0.000001}} {{error "clock period differs"}}\n'+
+                         'write_metric_int "pilot__clocked_registers__corner:$corner_name" $count\n')
+        for corner in corners:
+            cell_pvt = corner.split('_', 1)[1]
+            liberty = f"{flow['pdk']}/libs.ref/{flow['standard_cell_library']}/lib/{flow['standard_cell_library']}__{cell_pvt}.lib"
+            collateral[liberty] = digest(pdk_root/liberty)
+            interconnect = corner.split('_', 1)[0]
+            work = target/corner
+            work.mkdir()
+            config = {**settings, 'meta': {'version': 2, 'flow': ['OpenROAD.STAMidPNR']},
+                      'DESIGN_DIR': str(work),
+                      'DEFAULT_CORNER': corner, 'PNR_CORNERS': [corner], 'STA_CORNERS': [corner],
+                      'LAYERS_RC': {corner: rc[interconnect]['layers']},
+                      'VIAS_R': {'*': rc[interconnect]['vias']}, 'SET_RC_VERBOSE': True,
+                      'STA_EXTRA_CORNER_TCL_FILE': str(audit),
+                      'PNR_SDC_FILE': snapshot['sdc']}
+            config.pop('SIGNOFF_SDC_FILE', None)
+            config_path = work/'config.json'
+            config_path.write_text(json.dumps(config, indent=2)+'\n')
+            command = execute(['librelane', str(config_path), '--manual-pdk', '--pdk-root', '/pdk',
+                                 '--run-tag', 'timing', '--with-initial-state', str(initial),
+                                 '--jobs', str(flow['jobs']), '--condensed'], work, 'timing')
+            stage, = (work/'runs/timing').glob('*/state_out.json')
+            verify_corner_rc((stage.parent/'openroad-stamidpnr.log').read_text(), corner, rc[interconnect])
+            final = json.loads(stage.read_text())
+            if any(final[k] != snapshot[k] for k in ('odb', 'sdc')):
+                raise RuntimeError('Timing analysis changed its physical inputs')
+            measured = timing_measurements(stage.parent, corner)
+            if measured['fresh_timing_metrics'].get('pilot__clocked_registers__corner:'+corner) != registers:
+                raise RuntimeError('Physical clock audit is missing')
+            result = {'candidate': name, **measured, 'command': command}
+            (work/'receipt.json').write_text(json.dumps(result, indent=2)+'\n')
+            results.append(result)
+            print(name+' '+corner+': '+('PASS' if measured['reported_checks_passed'] else 'VIOLATIONS'), flush=True)
+        if any(digest(Path(snapshot[k])) != candidate['artifacts_sha256'][str(Path(state[k]).relative_to(ROOT))]
+               for k in ('odb', 'sdc')):
+            raise RuntimeError('Physical inputs changed during timing analysis')
+    if digest(source) != source_hash or any(digest(ROOT/p) != h for p, h in hashes.items()):
+        raise RuntimeError('Study inputs changed during analysis')
+    if any(digest(pdk_root/p) != h for p, h in collateral.items()):
+        raise RuntimeError('PDK collateral changed during analysis')
+    passed = all(r['reported_checks_passed'] for r in results)
+    summary = {'run_id': run_id, 'inputs_sha256': hashes, 'source_summary_sha256': source_hash,
+               'pdk_files_sha256': collateral, 'toolchain': flow, 'corners': corners, 'results': results,
+               'reported_checks_passed': passed, 'geometry_approved': False,
+               'scope': 'Fresh per-corner global-route parasitic estimates on unchanged routed storage shells; no extracted signoff.'}
+    summary['artifacts_sha256'] = {str(p.relative_to(ROOT)): digest(p) for p in directory.rglob('*') if p.is_file()}
+    (directory/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
+    archive = ROOT/'evidence/storage_pilot'/('corners-'+run_id+'.tar.gz')
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
+        for path in [*(ROOT/p for p in hashes), *(p for p in directory.rglob('*') if p.is_file())]:
+            tar.add(path, arcname=str(path.relative_to(ROOT)))
+    archive.with_suffix('.json').write_text(json.dumps({'archive_sha256': digest(archive),
+        'summary_sha256': digest(directory/'summary.json'), 'reported_checks_passed': passed}, indent=2)+'\n')
+    print('Retained '+str(archive.relative_to(ROOT)), flush=True)
+    if not passed:
+        raise SystemExit('Timing study completed with violations; see retained per-corner reports')
+
+
 def main():
     global OUT
     parser = argparse.ArgumentParser(description=__doc__)
@@ -329,8 +512,16 @@ def main():
     parser.add_argument('--synth', action='store_true')
     parser.add_argument('--mutations', action='store_true')
     parser.add_argument('--physical', action='store_true')
+    parser.add_argument('--physical-sta-from', type=Path, help='Analyze all corners of a retained physical summary')
     parser.add_argument('--pdk-store', type=Path, default=Path.home()/'.ciel')
     args = parser.parse_args()
+    if args.physical_sta_from:
+        if args.physical or args.synth or args.mutations:
+            parser.error('--physical-sta-from cannot be combined with other flow modes')
+        flow = json.loads((ROOT/'config/storage_physical.json').read_text())
+        pdk_root = physical_preflight(flow, args.pdk_store.resolve())
+        routed_corner_study(args.physical_sta_from.resolve(), flow, pdk_root, args.candidate)
+        return
     if args.physical and (args.synth or args.mutations):
         parser.error('--physical is a separate flow; do not combine it with --synth or --mutations')
     config = json.loads((ROOT/'config/storage_pilot.json').read_text())
