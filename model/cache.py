@@ -23,6 +23,8 @@ SEMANTICS = {
     "alignment": "natural_required",
     "unwritten_memory": "zero",
 }
+# the g0 whitelist is a whole-cache geometry: 512 b direct-mapped has the same leaf shapes.
+G0_GEOMETRY = (1024, 2, 32)
 
 
 class CacheError(ValueError):
@@ -40,7 +42,9 @@ def check_contract(contract: dict) -> dict:
         if semantics.get(key) != SEMANTICS.get(key):
             raise CacheError(f"contract.semantics.{key}: {semantics.get(key)!r} is not implemented")
     for name, spec in contract.get("caches", {}).items():
-        Geometry(spec["size_bytes"], spec["ways"], spec["line_bytes"])
+        g = Geometry(spec["size_bytes"], spec["ways"], spec["line_bytes"])
+        if (g.size_bytes, g.ways, g.line_bytes) != G0_GEOMETRY:
+            raise CacheError(f"contract.caches.{name}.geometry: {g} is not the g0 whitelist {G0_GEOMETRY}")
         if type(spec.get("writable")) is not bool:
             raise CacheError(f"contract.caches.{name}.writable: {spec.get('writable')!r}")
     return contract

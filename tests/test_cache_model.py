@@ -30,6 +30,9 @@ class CacheModelTest(unittest.TestCase):
             (lambda c: c["semantics"].pop("miss_order"), "semantics.miss_order"),
             (lambda c: c["semantics"].update(extra="x"), "semantics.extra"),
             (lambda c: c["caches"]["dcache"].update(ways=3), "geometry.ways"),
+            (lambda c: c["caches"]["dcache"].update(size_bytes=512, ways=1), "dcache.geometry"),
+            (lambda c: c["caches"]["icache"].update(size_bytes=512, ways=1), "icache.geometry"),
+            (lambda c: c["caches"]["dcache"].update(size_bytes=4096), "dcache.geometry"),
             (lambda c: c["caches"]["icache"].update(writable="no"), "icache.writable"),
             (lambda c: c["caches"]["icache"].pop("writable"), "icache.writable"),
         ]

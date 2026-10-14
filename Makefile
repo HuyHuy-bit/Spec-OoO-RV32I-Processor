@@ -254,6 +254,18 @@ storage-pilot-sta:
 cache-model-check:
 	@python3 -m unittest -v tests/test_cache_model.py
 
+L1_CACHE_SOURCES = rtl/generated/memory_protocol_pkg.sv rtl/memory/g0/dense_memory_1rw.sv \
+	rtl/memory/dense_memory_1rw_array.sv rtl/memory/l1_cache.sv
+
+l1-cache-rtl-check:
+	@set -e; for w in 1 0; do \
+	  verilator --lint-only -Wall -Wno-UNUSEDPARAM --top-module l1_cache -GWRITABLE=$$w $(L1_CACHE_SOURCES); \
+	  "$(OSS_CAD_SUITE)/bin/yosys" -Q -T -q -m slang \
+	    -p "read_slang --top l1_cache -GWRITABLE=$$w $(L1_CACHE_SOURCES); synth -top l1_cache"; \
+	  echo "l1_cache WRITABLE=$$w: lint and synth clean"; \
+	done
+	@python3 -m unittest -v tests/test_l1_cache_rtl.py
+
 two-wide-check:
 	@python3 tools/check_two_wide.py
 

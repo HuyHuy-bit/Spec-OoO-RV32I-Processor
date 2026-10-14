@@ -2,7 +2,7 @@
   "schema": 1,
   "profile": "blocking_l1_cache_reference_v0",
   "purpose": "Transaction-level reference for the blocking L1 caches: architectural data, hit/miss classification, replacement and downstream line traffic. It has no timing, races or pipeline state; RTL scoreboards compare its outcomes, not its cycles.",
-  "geometry_status": "G0 whitelist: the only buildable geometry. Each cache stores a 32-byte line per way as two 128-bit masked data leaves and one 23-bit tag leaf, all 16 deep (config/dense_memory.json g0_shapes). A G1 macro-backed geometry needs its own decision record.",
+  "geometry_status": "G0 whitelist: the only buildable geometry. model/cache.py G0_GEOMETRY rejects any other size, way count or line size (512 B direct-mapped has identical leaves, so the provider alone cannot). Each cache stores a 32-byte line per way as two 128-bit masked data leaves and one 23-bit tag leaf, all 16 deep (config/dense_memory.json g0_shapes). A G1 macro-backed geometry needs its own decision record.",
   "caches": {
     "dcache": {"size_bytes": 1024, "ways": 2, "line_bytes": 32, "writable": true},
     "icache": {"size_bytes": 1024, "ways": 2, "line_bytes": 32, "writable": false}
