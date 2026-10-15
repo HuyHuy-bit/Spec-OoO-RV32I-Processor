@@ -15,9 +15,9 @@ behind it. An out-of-order core runs whatever is ready. Three ideas keep that co
 - In-order retirement: a reorder buffer (ROB) commits results in program order,
   so traps and memory writes look sequential.
 
-![Simplified architecture](docs/diagrams/simplified-architecture.svg)
+![Simplified architecture](docs/diagrams/simplified-architecture.png)
 
-Dashed arrows redirect fetch. Module-level detail is in
+Red dashed arrows redirect fetch. Module-level detail is in
 [architecture](docs/architecture.md).
 
 | Idea | Size here | Source |
@@ -26,15 +26,22 @@ Dashed arrows redirect fetch. Module-level detail is in
 | Waiting for operands | 16-entry issue queue | [`issue_queue.sv`](rtl/backend/issue_queue.sv) |
 | Speculation | 8 checkpoints, static not-taken prediction | [`rename_checkpoints.sv`](rtl/backend/rename_checkpoints.sv) |
 | Retirement | 32-entry ROB, 2 retires per cycle | [`rob_two_wide.sv`](rtl/backend/rob_two_wide.sv) |
-| Loads and stores | Run at the ROB head, no caches | [`head_memory_controller.sv`](rtl/core/head_memory_controller.sv) |
+| Loads and stores | Run at the ROB head | [`head_memory_controller.sv`](rtl/core/head_memory_controller.sv) |
+| Caches | 1 KiB I$ + 1 KiB D$, two-way, 32-byte lines, blocking | [`l1_cache.sv`](rtl/memory/l1_cache.sv) |
 
 ## Status
 
 RV32I + Zicsr + Zifencei, machine mode. Integer, branch, CSR and trap execution
 work and are verified at the core level. Loads, stores, FENCE and FENCE.I work
-too, but only at the ROB head. Still to do: a load/store queue, caches, dynamic
-prediction, full-core timing and the GDSII run. I haven't measured IPC or
-frequency yet.
+too, but only at the ROB head. Blocking L1 caches are integrated and verified
+at the core level; FENCE.I cleans the D$ and invalidates the I$. Still to do:
+the store admission producer, a load/store queue, dynamic prediction, full-core
+timing and the GDSII run. I haven't measured IPC or frequency yet.
+
+The cache storage alone has been placed and globally routed with LibreLane on
+SKY130 and meets timing at all nine corners under a 40 ns experiment
+constraint (not a processor clock). Details in
+[architecture](docs/architecture.md#physical-design-so-far).
 
 ## Running it
 
@@ -45,6 +52,7 @@ Needs Python 3, GNU Make, a C++ toolchain, Verilator and the
 export OSS_CAD_SUITE=/path/to/oss-cad-suite
 make system-core-check   # integer, branch and trap core
 make memory-core-check   # adds loads, stores and fences
+make cached-core-check   # adds the I$ and D$
 ```
 
 More in [verification](docs/verification.md) and [references](docs/references.md).

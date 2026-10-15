@@ -19,6 +19,9 @@ make system-core-check
 | `make check-fast` | Schemas, reference models, Spike lockstep. Not the full core |
 | `make system-core-check` | Integer, branch, CSR and trap core |
 | `make memory-core-check` | Adds loads, stores, FENCE and FENCE.I |
+| `make cached-core-check` | The memory core's scenarios again with both L1 caches, plus evictions, writeback faults and FENCE.I cleans |
+| `make cache-model-check` | The cache reference model |
+| `make l1-cache-rtl-check` | The L1 cache alone against that model |
 | `make head-memory-check` | Memory controller alone |
 | `make sail-fetched-differential-check` | Real programs compared with Sail event by event. A small corpus, not ACT4 |
 | `make spike-fetched-differential-check` | The same programs compared with Spike, relocated above its debug module. Limits in [`config/spike_differential.json`](../config/spike_differential.json) |
