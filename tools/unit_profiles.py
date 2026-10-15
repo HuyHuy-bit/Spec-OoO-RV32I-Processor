@@ -1,4 +1,4 @@
-"""Profile-specific requirements for the shared RTL unit verification runner."""
+"""profile-specific requirements for the shared rtl unit verification runner."""
 
 PROFILES = {
     'rename_bundle': dict(
@@ -593,6 +593,45 @@ PROFILES = {
             'fence_i_keeps_line': ('rtl/frontend/fetch_two_wide.sv', '        end else state_q <= EMPTY;', '        end else if (redirect_pc_i[31:5] != pc_q[31:5]) state_q <= EMPTY;', 1),
             'fence_i_keeps_response': ('rtl/frontend/fetch_two_wide.sv', 'if (discard_q || redirect_i) state_q <= EMPTY;', 'if (redirect_i) state_q <= EMPTY;', 1),
             'wrong_captured_memory_source': ('rtl/core/head_memory_controller.sv', '.id_i(memory_id_i), .instruction_i, .pc_i, .source1_i, .source2_i,', ".id_i(memory_id_i), .instruction_i, .pc_i, .source1_i(source1_i ^ 32'd1), .source2_i,", 1),
+        },
+    ),
+    'cached_core': dict(
+        top='fetch_execution_core', sources=[],
+        inputs=['config/platform.yaml','config/memory_protocol.yaml','config/commit_event.yaml',
+                'config/head_memory_controller.json','config/memory_core.json','verif/unit/memory_core_tb.cpp',
+                'tools/gen_platform.py','tools/gen_memory_protocol.py','tools/gen_commit_event.py'],
+        headers=['event','memory','csr','pma'], schema_checks=['platform-check','event-check','memory-check'],
+        parameters={'FRONTEND_FAULTS':1,'TRAP_SERVICE':1,'MEMORY_SERVICE':1,'ICACHE':1,'DCACHE':1}, timeout=900,
+        random_key=None, prefix='MEMORY CORE PASS ', geometry=lambda config: config['parameters']=={'FRONTEND_FAULTS':1,'TRAP_SERVICE':1,'MEMORY_SERVICE':1,'ICACHE':1,'DCACHE':1},
+        validate=lambda config, fields, seed: fields.get('seed')==seed and fields.get('retired',0)>3000 and fields.get('traps',0)>=8,
+        required=['icache_hit','icache_miss','icache_refill_wait','request_stall','icache_loop','icache_fault','icache_fault_slow',
+                  'icache_smc_refill','frontend_bus_fault','redirect_pending','redirect_request_stall',
+                  'dcache_fill','dcache_writeback','dcache_mmio','dcache_load_hit','dcache_load_miss','dcache_conflict','dcache_clean_all_ways','dcache_fatal_recycle',
+                  'dcache_fatal','dcache_writeback_fault','dcache_smc_clean','memory_trap_5','memory_trap_7',
+                  'dcache_fill_stall','dcache_writeback_stall','dcache_mmio_stall','dcache_fatal_latency','dcache_mmio_load_protocol_fatal','dcache_mmio_store_protocol_fatal',
+                  'fence_i_retired','fence_i_redirect','smc_stale_buffered','fence_retired',
+                  'fence_i_held_request','fence_i_delayed_response','fence_i_coincident_response',
+                  *['fence_i_'+a+'_'+b for a in ('wait','held') for b in ('flush','reset','fatal')],
+                  *['frontend_fatal_memory_'+str(n) for n in range(4)], *['flush_memory_'+str(n) for n in range(9)],
+                  *['reset_memory_'+str(n) for n in range(9)], 'data_fatal','pregrant_fatal','held_fault_protocol_error',
+                  'mmio_fault_hold','mmio_success_hold','memory_drain','random_program','store_commit'],
+        negatives={}, guards={}, extra_runs=[], mutation_args=['1'], mismatch='fetch execution core mismatch',
+        mutation_flags=['-DSYNTHESIS','-Wno-UNUSEDSIGNAL','-Wno-UNUSEDPARAM'], mutations={
+            'dcache_no_clean': ('rtl/core/fetch_execution_core.sv', 'SYNC_IDLE: if (fence_i_retired) sync_q <= DCACHE ? SYNC_CLEAN', 'SYNC_IDLE: if (fence_i_retired) sync_q <= DCACHE ? SYNC_INVALIDATE', 1),
+            'icache_fatal_dropped': ('rtl/core/fetch_execution_core.sv', 'fetch_fatal || memory_fatal_o || icache_fatal', 'fetch_fatal || memory_fatal_o', 1),
+            'icache_invalidate_on_mret': ('rtl/core/fetch_execution_core.sv', "retire_event_o[0].instruction[14:12] == 3'd1", "retire_event_o[0].instruction[14:12] == 3'd0", 1),
+            'icache_installs_faulted_fill': ('rtl/memory/l1_cache.sv', 'wire fill_ok = mem_response_i.status == MEM_STATUS_OK;', "wire fill_ok = 1'b1;", 1),
+            'icache_refill_ignores_offset': ('rtl/memory/l1_cache.sv', "mem_request_o.address = {req_q.address[31:OFFSET_BITS], {OFFSET_BITS{1'b0}}};", "mem_request_o.address = {req_q.address[31:OFFSET_BITS+1], {OFFSET_BITS+1{1'b0}}};", 1),
+            'icache_skipped_after_clean': ('rtl/core/fetch_execution_core.sv', 'SYNC_CLEAN: if (clean_done) sync_q <= ICACHE ? SYNC_INVALIDATE : SYNC_IDLE;', 'SYNC_CLEAN: if (clean_done) sync_q <= SYNC_IDLE;', 1),
+            'fetch_during_sync': ('rtl/core/fetch_execution_core.sv', 'recycle_q == RUN && sync_q == SYNC_IDLE', 'recycle_q == RUN', 1),
+            'dcache_fatal_dropped': ('rtl/core/fetch_execution_core.sv', 'backend_memory_fatal || dcache_fatal', 'backend_memory_fatal', 1),
+            'dcache_clean_skips_way1': ('rtl/memory/l1_cache.sv', 'else if (dirty_q[cursor_set][cursor_way]) state_q <= FLUSH_READ;', 'else if (dirty_q[cursor_set][cursor_way] && !cursor_way) state_q <= FLUSH_READ;', 1),
+            'dcache_clean_skips_last_set': ('rtl/memory/l1_cache.sv', 'if (cursor_q[INDEX_BITS+1]) state_q <= FLUSH_DONE;', 'if (cursor_q[INDEX_BITS+1] || &cursor_set) state_q <= FLUSH_DONE;', 1),
+            'dcache_store_hit_clean': ('rtl/memory/l1_cache.sv', 'if (req_q.write) dirty_q[set][hit_index] <= 1\'b1;', 'if (1\'b0) dirty_q[set][hit_index] <= 1\'b1;', 1),
+            'dcache_store_miss_clean': ('rtl/memory/l1_cache.sv', 'dirty_q[set][victim_q] <= req_q.write;', "dirty_q[set][victim_q] <= 1'b0;", 1),
+            # alter stalled requests only; acceptance checks cannot catch the change.
+            'dcache_writeback_unstable': ('rtl/memory/l1_cache.sv', 'mem_request_o.address = wb_address_q;', "mem_request_o.address = wb_address_q ^ {26'd0, !mem_request_ready_i, 5'd0};", 1),
+            'dcache_fill_unstable': ('rtl/memory/l1_cache.sv', "mem_request_o.address = {req_q.address[31:OFFSET_BITS], {OFFSET_BITS{1'b0}}};", "mem_request_o.address = {req_q.address[31:OFFSET_BITS], {OFFSET_BITS{1'b0}}} ^ {26'd0, !mem_request_ready_i, 5'd0};", 1),
         },
     ),
     'head_memory_controller': dict(

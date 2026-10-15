@@ -32,6 +32,9 @@
     "rtl/execute/data_port_arbiter.sv",
     "rtl/execute/memory_transaction_path.sv",
     "rtl/core/head_memory_controller.sv",
+    "rtl/memory/g0/dense_memory_1rw.sv",
+    "rtl/memory/dense_memory_1rw_array.sv",
+    "rtl/memory/l1_cache.sv",
     "rtl/core/fetch_execution_core.sv"
   ],
   "lint_config": "config/fetch_execution_core.vlt",

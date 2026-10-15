@@ -5,13 +5,7 @@
   "seeds": [1, 42],
   "random_cycles": 2000,
   "candidates": [
-    {"name": "small_direct_parallel", "i_bytes": 512, "d_bytes": 512, "ways": 1, "bank_words": 8},
-    {"name": "small_associative_serial", "i_bytes": 512, "d_bytes": 512, "ways": 2, "bank_words": 1},
-    {"name": "balanced_parallel", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 8},
-    {"name": "balanced_serial", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 1},
-    {"name": "balanced_interleaved", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 2},
-    {"name": "asymmetric_parallel", "i_bytes": 4096, "d_bytes": 1024, "ways": 2, "bank_words": 8},
-    {"name": "baseline_parallel", "i_bytes": 4096, "d_bytes": 4096, "ways": 2, "bank_words": 8}
+    {"name": "balanced_parallel", "i_bytes": 1024, "d_bytes": 1024, "ways": 2, "bank_words": 8}
   ],
   "timing": {
     "schema": 1,

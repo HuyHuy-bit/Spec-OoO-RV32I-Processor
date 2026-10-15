@@ -25,6 +25,9 @@
     "rtl/frontend/fetch_two_wide.sv",
     "rtl/frontend/frontend_fault_decode.sv",
     "rtl/core/csr_two_wide.sv",
+    "rtl/memory/g0/dense_memory_1rw.sv",
+    "rtl/memory/dense_memory_1rw_array.sv",
+    "rtl/memory/l1_cache.sv",
     "rtl/core/fetch_execution_core.sv"
   ],
   "lint_config": "config/fetch_execution_core.vlt",

@@ -6,7 +6,7 @@
   "pdk_revision": "8afc8346a57fe1ab7934ba5a6056ea8b43078e71",
   "pdk": "sky130A",
   "standard_cell_library": "sky130_fd_sc_hd",
-  "candidates": ["small_direct_parallel", "balanced_parallel"],
+  "candidates": ["balanced_parallel"],
   "analysis_corners": [
     "nom_tt_025C_1v80", "nom_ss_100C_1v60", "nom_ff_n40C_1v95",
     "min_tt_025C_1v80", "min_ss_100C_1v60", "min_ff_n40C_1v95",

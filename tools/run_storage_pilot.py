@@ -201,7 +201,7 @@ def synthesize(candidate, config, directory, yosys, lock):
                       for i, bit in enumerate(port['bits']) if bit in ('0', '1'))
     timing = analyze(str(DEPS/lock['opensta']['executable']), liberty,
                      (directory/'mapped.v').relative_to(ROOT), TOP, directory/'timing', sdc(c, True), constants)
-    if candidate['name'] == 'small_direct_parallel':
+    if True:  # negative control: dropping output delays must be rejected
         missing = '\n'.join(line for line in sdc(c, True).splitlines() if not line.startswith('set_output_delay'))+'\n'
         try:
             analyze(str(DEPS/lock['opensta']['executable']), liberty, (directory/'mapped.v').relative_to(ROOT),
@@ -217,7 +217,7 @@ def synthesize(candidate, config, directory, yosys, lock):
 
 
 def mutations(config):
-    candidate = next(c for c in config['candidates'] if c['name'] == 'balanced_interleaved')
+    candidate = next(c for c in config['candidates'] if c['name'] == 'balanced_parallel')
     changes = {
         'mask_ignored': (0, 'if (wmask_i[lane])', "if (1'b1)"),
         'row_alias': (0, 'array_q[addr_i]', 'array_q[addr_i >> 1]'),

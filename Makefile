@@ -87,6 +87,10 @@ load-store-prepare-check:
 memory-core-check:
 	@python3 tools/run_unit.py memory_core --suite "$(OSS_CAD_SUITE)"
 
+.PHONY: cached-core-check
+cached-core-check:
+	@python3 tools/run_unit.py cached_core --suite "$(OSS_CAD_SUITE)"
+
 system-core-check:
 	@python3 tools/run_unit.py system_core --suite "$(OSS_CAD_SUITE)"
 

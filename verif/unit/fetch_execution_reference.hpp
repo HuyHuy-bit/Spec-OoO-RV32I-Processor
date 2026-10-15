@@ -51,9 +51,16 @@ struct Bench {
     uint64_t order=0;
     bool pending=false, held=false, fatal=false, data_fatal=false;
     std::array<uint32_t,(REQUEST_BITS+31)/32> held_request{};
-    // Instruction target data is captured at request acceptance; fetched words must match the last response.
+    // capture instruction bytes at request acceptance for the fetch oracle.
     std::array<uint32_t,8> pending_line{}, line{};
     uint32_t line_address=UINT32_MAX;
+    // cached fetches match the latest successful fill since reset or fence.i.
+    bool icache=false;
+    // the data cache adds a response stage before mmio protocol-error detection.
+    unsigned data_fatal_latency=0, data_fatal_wait=0;
+    std::map<uint32_t,std::array<uint32_t,8>> filled;
+    std::map<uint32_t,unsigned> line_fills;
+    uint32_t viewed_line=UINT32_MAX, fresh_fill=UINT32_MAX;
     void require(bool good,const std::string& why) const {
         if (!good) throw std::runtime_error("fetch execution core mismatch cycle="+std::to_string(cycles)+": "+why);
     }
@@ -207,12 +214,14 @@ struct Bench {
         unsigned ordinary=0;
         if (i.reset) {
             require(!d.request_valid_o && !d.response_ready_o && !d.dispatch_o && !d.retire_accept_o && !d.redirect_o,"reset outputs");
-            pending=held=fatal=data_fatal=false; line_address=UINT32_MAX; pc=0; order=0; expected_id=0; known.fill(false); known[0]=true; regs[0]=0;
+            pending=held=fatal=data_fatal=false; data_fatal_wait=0; line_address=UINT32_MAX;
+            filled.clear(); viewed_line=fresh_fill=UINT32_MAX; pc=0; order=0; expected_id=0; known.fill(false); known[0]=true; regs[0]=0;
             trap_csrs={0x1800,0,0,0}; csr_state.reset_state(); system_prepared=false;
             coverage["reset"]++;
         } else {
-            const bool halted=fatal || data_fatal;
-            require(bool(d.fatal_o)==halted,"fatal state");
+            bool halted=fatal || data_fatal;
+            if (data_fatal && !fatal && !d.fatal_o && data_fatal_wait<data_fatal_latency) { ++data_fatal_wait; halted=false; }
+            require(bool(d.fatal_o)==halted,"fatal state dut="+std::to_string(d.fatal_o)+" memory="+std::to_string(d.memory_fatal_o)+" fetch="+std::to_string(fatal)+" data="+std::to_string(data_fatal)+" pc="+std::to_string(pc));
             if (halted) require(!d.dispatch_o && !d.retire_accept_o && !d.trap_accept_o && !d.redirect_o,"fatal architectural freeze");
             if (system_service && (i.flush || halted))
                 require(!d.system_prepare_o && !d.system_busy_o,"canceled system response still visible");
@@ -243,6 +252,7 @@ struct Bench {
                 }
                 else if (!i.flush && !d.trap_accept_o) coverage["branch_redirect"]++;
                 if (pending) coverage["redirect_pending"]++;
+                viewed_line=UINT32_MAX;
                 if (held) coverage["redirect_request_stall"]++;
             }
             require(d.dispatch_o!=2 && !(d.dispatch_o & ~d.fetch_valid_o),"dispatch prefix");
@@ -264,7 +274,14 @@ struct Bench {
                 uint32_t address=uint32_t(d.fetch_pc_o>>(32*lane));
                 require(address<65536 && address%4==0,"fetched executable PC");
                 const uint32_t word=uint32_t(d.fetch_instruction_o>>(32*lane));
-                require((address&~31U)==line_address && word==line[address%32/4],"fetched word");
+                if (icache) {
+                    const auto hit=filled.find(address&~31U);
+                    require(hit!=filled.end() && word==hit->second[address%32/4],"fetched word from I$");
+                    if (!lane && (address&~31U)!=viewed_line) {
+                        coverage[fresh_fill==(address&~31U) ? "icache_miss":"icache_hit"]++;
+                        viewed_line=address&~31U; fresh_fill=UINT32_MAX;
+                    }
+                } else require((address&~31U)==line_address && word==line[address%32/4],"fetched word");
                 if (word!=memory[address/4]) coverage["stale_fetch_visible"]++;
                 if (system_service && word==0x10500073)
                     coverage[lane ? "wfi_seen_lane1":"wfi_seen_lane0"]++;
@@ -290,7 +307,7 @@ struct Bench {
                     require(!pending,"overlapping instruction requests");
                     const unsigned id=get32(d.request_o,REQUEST_TRANSACTION_ID_OFFSET,4);
                     uint32_t address=get32(d.request_o,REQUEST_ADDRESS_OFFSET,32);
-                    require(id==expected_id && address%32==0 && address<65536,"request address/identity");
+                    require((icache || id==expected_id) && address%32==0 && address<65536,"request address/identity");
                     for (unsigned n=0;n<REQUEST_BITS;++n)
                         if (!(n>=REQUEST_TRANSACTION_ID_OFFSET && n<REQUEST_TRANSACTION_ID_OFFSET+4)
                             && !(n>=REQUEST_ADDRESS_OFFSET && n<REQUEST_ADDRESS_OFFSET+32))
@@ -303,9 +320,13 @@ struct Bench {
                         for (unsigned n=0;n<held_request.size();++n) held_request[n]=d.request_o[n];
                     }
                 } else if (pending && delay) --delay;
+                if (icache && pending && !d.fetch_valid_o) coverage["icache_refill_wait"]++;
                 if (response && d.response_ready_o) {
                     pending=false; expected_id=(expected_id+1)%16;
                     line_address=pending_address; line=pending_line;
+                    if (pending_address==error_address) filled.erase(pending_address);
+                    else { filled[pending_address]=pending_line; line_fills[pending_address]++; }
+                    fresh_fill=pending_address;
                     for (unsigned n=0;n<8;++n) if (line[n]!=memory[line_address/4+n]) { coverage["stale_response"]++; break; }
                 }
                 if (i.inject_bad) { fatal=true; coverage["fatal_injected"]++; }
@@ -322,6 +343,7 @@ struct Bench {
                 if (system_service && ((e.op>=29 && e.op<=31) || e.op==34 || e.op==35)) {
                     require(d.retire_accept_o==1 && system_prepared,"serial acceptance");
                     if (e.op==30 || e.op==35) require(d.redirect_o && d.redirect_pc_o==e.next_pc,"missing MRET or FENCE.I redirect");
+                    if (e.op==35 && icache) { filled.clear(); viewed_line=UINT32_MAX; }
                     accepted_csr=system_reply; csr_accept=true; system_prepared=false;
                     coverage[e.op==30 ? "mret_retired":e.op==31 ? "wfi_retired":e.op==34 ? "fence_retired":e.op==35 ? "fence_i_retired":"csr_retired"]++;
                 } else ordinary++;
